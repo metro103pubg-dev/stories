@@ -27,11 +27,16 @@ class AdminState(BaseStateGroup):
     CH_FREE = "ch_free"
     BROADCAST = "broadcast"
     GEN_LINK = "gen_link"
+    DEL_STORY = "del_story"
+    DEL_CHAPTER = "del_chapter"
 
 def admin_root_kb():
     kb = Keyboard(inline=False)
     kb.add(Text("➕ Создать историю", payload={"adm": "add_story"}), color=KeyboardButtonColor.POSITIVE)
     kb.add(Text("📝 Добавить главу", payload={"adm": "add_chapter"}), color=KeyboardButtonColor.PRIMARY)
+    kb.row()
+    kb.add(Text("🗑️ Удалить историю", payload={"adm": "del_story"}), color=KeyboardButtonColor.NEGATIVE)
+    kb.add(Text("🗑️ Удалить главу", payload={"adm": "del_chapter"}), color=KeyboardButtonColor.NEGATIVE)
     kb.row()
     kb.add(Text("🔗 Ссылка для рекламы", payload={"adm": "gen_link"}), color=KeyboardButtonColor.PRIMARY)
     kb.add(Text("🏷️ Жанры", payload={"adm": "menu_genres"}))
@@ -57,192 +62,74 @@ async def admin_panel(message: Message):
 async def back_to_main_user_menu(message: Message):
     await message.answer("Вы вернулись в главное меню читателя 👇", keyboard=main_menu_kb())
 
-# --- 📢 РАССЫЛКА С ПОЛНЫМ ОТЧЕТОМ ---
-@admin_labeler.message(text="📢 Рассылка")
-@admin_labeler.message(payload={"adm": "broadcast"})
-async def broadcast_1(message: Message):
+# --- 🗑️ УДАЛЕНИЕ ИСТОРИИ ЦЕЛИКОМ ---
+@admin_labeler.message(text="🗑️ Удалить историю")
+@admin_labeler.message(payload={"adm": "del_story"})
+async def del_story_step1(message: Message):
     if message.from_id not in ADMIN_IDS: return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.BROADCAST)
-    await message.answer(
-        "📢 Введите текст сообщения для рассылки всем читателям бота:\n\n"
-        "(Можно прикрепить фото к сообщению)"
-    )
-
-@admin_labeler.message(state=AdminState.BROADCAST)
-async def broadcast_2(message: Message):
-    text_to_send = message.text
-    photo_att = None
-    if message.attachments:
-        for a in message.attachments:
-            if a.photo:
-                photo_att = f"photo{a.photo.owner_id}_{a.photo.id}"
-                break
-
-    await admin_labeler.state_dispenser.delete(message.peer_id)
-    await message.answer("⏳ Рассылка запущена, отправляем...")
 
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id FROM users") as cur:
-            users = await cur.fetchall()
+        async with db.execute("SELECT id, title FROM stories") as cur:
+            stories = await cur.fetchall()
 
-    total = len(users)
-    success = 0
-    errors = 0
+    if not stories:
+        await message.answer("Список историй пуст, удалять нечего.", keyboard=admin_root_kb())
+        return
 
-    for u in users:
-        u_id = u[0]
-        try:
-            r_id = random.randint(100000, 999999999)
-            if photo_att:
-                await api.messages.send(user_id=u_id, message=text_to_send, attachment=photo_att, random_id=r_id)
-            else:
-                await api.messages.send(user_id=u_id, message=text_to_send, random_id=r_id)
-            success += 1
-            await asyncio.sleep(0.05)  # Защита от лимитов ВК
-        except Exception as e:
-            errors += 1
-            print(f"Ошибка отправки пользователю {u_id}: {e}")
+    text = "📚 Список существующих историй:\n\n"
+    for s_id, s_title in stories:
+        text += f"• [ID: {s_id}] {s_title}\n"
+    text += "\nВведите ID истории, которую хотите удалить:"
 
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.DEL_STORY)
+    await message.answer(text)
+
+@admin_labeler.message(state=AdminState.DEL_STORY)
+async def del_story_step2(message: Message):
+    if not message.text.isdigit():
+        await message.answer("Пожалуйста, введите число (ID истории):")
+        return
+
+    story_id = int(message.text)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM stories WHERE id = ?", (story_id,))
+        await db.execute("DELETE FROM chapters WHERE story_id = ?", (story_id,))
+        await db.execute("DELETE FROM purchases WHERE story_id = ?", (story_id,))
+        await db.execute("DELETE FROM chapter_timers WHERE story_id = ?", (story_id,))
+        await db.commit()
+
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer(f"🗑️ История #{story_id} и все её главы успешно удалены!", keyboard=admin_root_kb())
+
+# --- 🗑️ УДАЛЕНИЕ КОНКРЕТНОЙ ГЛАВЫ ---
+@admin_labeler.message(text="🗑️ Удалить главу")
+@admin_labeler.message(payload={"adm": "del_chapter"})
+async def del_chapter_step1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.DEL_CHAPTER)
     await message.answer(
-        f"✅ Рассылка завершена!\n\n"
-        f"👥 Всего в базе: {total}\n"
-        f" Доставлено: {success}\n"
-        f"❌ Ошибок (заблокировали бота): {errors}",
-        keyboard=admin_root_kb()
+        "Введите через пробел: ID истории и номер главы для удаления\n"
+        "Например: 1 2 (удалит Главу #2 у Истории #1):"
     )
 
-# --- 🏷️ РАЗДЕЛ: ЖАНРЫ ---
-@admin_labeler.message(text="🏷️ Жанры")
-@admin_labeler.message(payload={"adm": "menu_genres"})
-async def admin_genres_view(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    genres = await get_all_genres()
-    text = "🏷️ Список активных жанров:\n\n"
-    for g_id, g_name in genres:
-        text += f"• [{g_id}] {g_name}\n"
-    
-    kb = Keyboard(inline=True)
-    kb.add(Text("➕ Добавить жанр", payload={"adm": "add_genre"}), color=KeyboardButtonColor.POSITIVE)
-    kb.add(Text("🗑️ Удалить жанр", payload={"adm": "del_genre"}), color=KeyboardButtonColor.NEGATIVE)
-    
-    await message.answer(text, keyboard=kb)
-
-@admin_labeler.message(text="➕ Добавить жанр")
-@admin_labeler.message(payload={"adm": "add_genre"})
-async def add_genre_1(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.ADD_GENRE)
-    await message.answer("Введите название нового жанра (например: 🛸 Фантастика):")
-
-@admin_labeler.message(state=AdminState.ADD_GENRE)
-async def add_genre_2(message: Message):
-    await add_genre_db(message.text)
-    await admin_labeler.state_dispenser.delete(message.peer_id)
-    await message.answer(f"✅ Жанр «{message.text}» успешно добавлен!", keyboard=admin_root_kb())
-
-@admin_labeler.message(text="🗑️ Удалить жанр")
-@admin_labeler.message(payload={"adm": "del_genre"})
-async def del_genre_1(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.DEL_GENRE)
-    await message.answer("Введите ID жанра (цифру в скобках), который хотите удалить:")
-
-@admin_labeler.message(state=AdminState.DEL_GENRE)
-async def del_genre_2(message: Message):
-    if not message.text.isdigit():
-        await message.answer("Введите число (ID жанра)!")
-        return
-    await delete_genre_db(int(message.text))
-    await admin_labeler.state_dispenser.delete(message.peer_id)
-    await message.answer("🗑️ Жанр успешно удален!", keyboard=admin_root_kb())
-
-# --- ⚙️ РАЗДЕЛ: ЭКОНОМИКА ---
-@admin_labeler.message(text="⚙️ Экономика")
-@admin_labeler.message(payload={"adm": "menu_settings"})
-async def admin_settings_view(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    t_hours = await get_setting("timer_hours", "3")
-    r_coins = await get_setting("ref_coins", "20")
-    
-    kb = Keyboard(inline=True)
-    kb.add(Text("⏳ Изменить таймер", payload={"adm": "set_timer"}))
-    kb.row()
-    kb.add(Text("🎁 Изменить награду за друга", payload={"adm": "set_ref"}))
-
-    await message.answer(
-        f"⚙️ Текущие настройки экономики:\n\n"
-        f"⏳ Бесплатный таймер: {t_hours} ч.\n"
-        f"🎁 Награда за реферала: {r_coins} монет",
-        keyboard=kb
-    )
-
-@admin_labeler.message(text="⏳ Изменить таймер")
-@admin_labeler.message(payload={"adm": "set_timer"})
-async def set_timer_1(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.SET_TIMER)
-    await message.answer("Сколько часов читатель должен ждать бесплатную главу? (введите число, например: 2):")
-
-@admin_labeler.message(state=AdminState.SET_TIMER)
-async def set_timer_2(message: Message):
-    if not message.text.isdigit():
-        await message.answer("Пожалуйста, введите число!")
-        return
-    await set_setting("timer_hours", message.text)
-    await admin_labeler.state_dispenser.delete(message.peer_id)
-    await message.answer(f"✅ Время таймера изменено на {message.text} ч.!", keyboard=admin_root_kb())
-
-@admin_labeler.message(text="🎁 Изменить награду за друга")
-@admin_labeler.message(payload={"adm": "set_ref"})
-async def set_ref_1(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.SET_REF)
-    await message.answer("Сколько монет начислять за каждого приглашенного друга? (введите число, например: 20):")
-
-@admin_labeler.message(state=AdminState.SET_REF)
-async def set_ref_2(message: Message):
-    if not message.text.isdigit():
-        await message.answer("Пожалуйста, введите число!")
-        return
-    await set_setting("ref_coins", message.text)
-    await admin_labeler.state_dispenser.delete(message.peer_id)
-    await message.answer(f"✅ Награда за реферала изменена на {message.text} монет!", keyboard=admin_root_kb())
-
-# --- 🔗 ГЕНЕРАТОР ССЫЛОК ---
-@admin_labeler.message(text="🔗 Ссылка для рекламы")
-@admin_labeler.message(payload={"adm": "gen_link"})
-async def gen_link_step1(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.GEN_LINK)
-    await message.answer(
-        "🔗 Введите через пробел: ID истории и номер главы\n"
-        "Например: 1 2 (означает История #1, Глава #2):"
-    )
-
-@admin_labeler.message(state=AdminState.GEN_LINK)
-async def gen_link_step2(message: Message):
+@admin_labeler.message(state=AdminState.DEL_CHAPTER)
+async def del_chapter_step2(message: Message):
     parts = message.text.strip().split()
     if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
         await message.answer("Пожалуйста, введите два числа через пробел (например: 1 2):")
         return
 
-    s_id = parts[0]
-    ch_num = parts[1]
-    await admin_labeler.state_dispenser.delete(message.peer_id)
+    s_id = int(parts[0])
+    ch_num = int(parts[1])
 
-    link = f"https://vk.me/club{GROUP_ID}?ref=story_{s_id}_{ch_num}"
-    await message.answer(f"🔗 Ваша готовая ссылка:\n\n{link}\n\nВставьте её в рекламный пост!", keyboard=admin_root_kb())
-
-# --- 📊 СТАТИСТИКА ---
-@admin_labeler.message(text="📊 Статистика")
-@admin_labeler.message(payload={"adm": "stats"})
-async def stats(message: Message):
-    if message.from_id not in ADMIN_IDS: return
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM users") as u: total_u = (await u.fetchone())[0]
-        async with db.execute("SELECT COUNT(*) FROM stories") as s: total_s = (await s.fetchone())[0]
-        async with db.execute("SELECT COUNT(*) FROM purchases") as p: total_p = (await p.fetchone())[0]
-    await message.answer(f"📊 Статистика:\n\n👤 Читателей: {total_u}\n📚 Историй: {total_s}\n💰 Покупок: {total_p}", keyboard=admin_root_kb())
+        await db.execute("DELETE FROM chapters WHERE story_id = ? AND chapter_num = ?", (s_id, ch_num))
+        await db.execute("DELETE FROM purchases WHERE story_id = ? AND chapter_num = ?", (s_id, ch_num))
+        await db.execute("DELETE FROM chapter_timers WHERE story_id = ? AND chapter_num = ?", (s_id, ch_num))
+        await db.commit()
+
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer(f"🗑️ Глава {ch_num} истории #{s_id} успешно удалена!", keyboard=admin_root_kb())
 
 # --- ➕ СОЗДАНИЕ ИСТОРИИ ---
 @admin_labeler.message(text="➕ Создать историю")
@@ -372,3 +259,186 @@ async def add_ch_6(message: Message):
 
     await admin_labeler.state_dispenser.delete(message.peer_id)
     await message.answer(f"✅ Глава {state.payload['ch_num']} успешно сохранена!", keyboard=admin_root_kb())
+
+# --- 🔗 ГЕНЕРАТОР ССЫЛОК ---
+@admin_labeler.message(text="🔗 Ссылка для рекламы")
+@admin_labeler.message(payload={"adm": "gen_link"})
+async def gen_link_step1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.GEN_LINK)
+    await message.answer(
+        "🔗 Введите через пробел: ID истории и номер главы\n"
+        "Например: 1 2 (означает История #1, Глава #2):"
+    )
+
+@admin_labeler.message(state=AdminState.GEN_LINK)
+async def gen_link_step2(message: Message):
+    parts = message.text.strip().split()
+    if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
+        await message.answer("Пожалуйста, введите два числа через пробел (например: 1 2):")
+        return
+
+    s_id = parts[0]
+    ch_num = parts[1]
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+
+    link = f"https://vk.me/club{GROUP_ID}?ref=story_{s_id}_{ch_num}"
+    await message.answer(f"🔗 Ваша готовая ссылка:\n\n{link}\n\nВставьте её в рекламный пост!", keyboard=admin_root_kb())
+
+# --- 🏷️ ЖАНРЫ ---
+@admin_labeler.message(text="🏷️ Жанры")
+@admin_labeler.message(payload={"adm": "menu_genres"})
+async def admin_genres_view(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    genres = await get_all_genres()
+    text = "🏷️ Список активных жанров:\n\n"
+    for g_id, g_name in genres:
+        text += f"• [{g_id}] {g_name}\n"
+    
+    kb = Keyboard(inline=True)
+    kb.add(Text("➕ Добавить жанр", payload={"adm": "add_genre"}), color=KeyboardButtonColor.POSITIVE)
+    kb.add(Text("🗑️ Удалить жанр", payload={"adm": "del_genre"}), color=KeyboardButtonColor.NEGATIVE)
+    
+    await message.answer(text, keyboard=kb)
+
+@admin_labeler.message(text="➕ Добавить жанр")
+@admin_labeler.message(payload={"adm": "add_genre"})
+async def add_genre_1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.ADD_GENRE)
+    await message.answer("Введите название нового жанра (например: 🛸 Фантастика):")
+
+@admin_labeler.message(state=AdminState.ADD_GENRE)
+async def add_genre_2(message: Message):
+    await add_genre_db(message.text)
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer(f"✅ Жанр «{message.text}» успешно добавлен!", keyboard=admin_root_kb())
+
+@admin_labeler.message(text="🗑️ Удалить жанр")
+@admin_labeler.message(payload={"adm": "del_genre"})
+async def del_genre_1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.DEL_GENRE)
+    await message.answer("Введите ID жанра (цифру в скобках), который хотите удалить:")
+
+@admin_labeler.message(state=AdminState.DEL_GENRE)
+async def del_genre_2(message: Message):
+    if not message.text.isdigit():
+        await message.answer("Введите число (ID жанра)!")
+        return
+    await delete_genre_db(int(message.text))
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer("🗑️ Жанр успешно удален!", keyboard=admin_root_kb())
+
+# --- ⚙️ ЭКОНОМИКА ---
+@admin_labeler.message(text="⚙️ Экономика")
+@admin_labeler.message(payload={"adm": "menu_settings"})
+async def admin_settings_view(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    t_hours = await get_setting("timer_hours", "3")
+    r_coins = await get_setting("ref_coins", "20")
+    
+    kb = Keyboard(inline=True)
+    kb.add(Text("⏳ Изменить таймер", payload={"adm": "set_timer"}))
+    kb.row()
+    kb.add(Text("🎁 Изменить награду за друга", payload={"adm": "set_ref"}))
+
+    await message.answer(
+        f"⚙️ Текущие настройки экономики:\n\n"
+        f"⏳ Бесплатный таймер: {t_hours} ч.\n"
+        f"🎁 Награда за реферала: {r_coins} монет",
+        keyboard=kb
+    )
+
+@admin_labeler.message(text="⏳ Изменить таймер")
+@admin_labeler.message(payload={"adm": "set_timer"})
+async def set_timer_1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.SET_TIMER)
+    await message.answer("Сколько часов читатель должен ждать бесплатную главу? (введите число, например: 2):")
+
+@admin_labeler.message(state=AdminState.SET_TIMER)
+async def set_timer_2(message: Message):
+    if not message.text.isdigit():
+        await message.answer("Пожалуйста, введите число!")
+        return
+    await set_setting("timer_hours", message.text)
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer(f"✅ Время таймера изменено на {message.text} ч.!", keyboard=admin_root_kb())
+
+@admin_labeler.message(text="🎁 Изменить награду за друга")
+@admin_labeler.message(payload={"adm": "set_ref"})
+async def set_ref_1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.SET_REF)
+    await message.answer("Сколько монет начислять за каждого приглашенного друга? (введите число, например: 20):")
+
+@admin_labeler.message(state=AdminState.SET_REF)
+async def set_ref_2(message: Message):
+    if not message.text.isdigit():
+        await message.answer("Пожалуйста, введите число!")
+        return
+    await set_setting("ref_coins", message.text)
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer(f"✅ Награда за реферала изменена на {message.text} монет!", keyboard=admin_root_kb())
+
+# --- 📊 СТАТИСТИКА ---
+@admin_labeler.message(text="📊 Статистика")
+@admin_labeler.message(payload={"adm": "stats"})
+async def stats(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM users") as u: total_u = (await u.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM stories") as s: total_s = (await s.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM purchases") as p: total_p = (await p.fetchone())[0]
+    await message.answer(f"📊 Статистика:\n\n👤 Читателей: {total_u}\n📚 Историй: {total_s}\n💰 Покупок: {total_p}", keyboard=admin_root_kb())
+
+# --- 📢 РАССЫЛКА ---
+@admin_labeler.message(text="📢 Рассылка")
+@admin_labeler.message(payload={"adm": "broadcast"})
+async def broadcast_1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.BROADCAST)
+    await message.answer("Введите текст сообщения для рассылки всем читателям:")
+
+@admin_labeler.message(state=AdminState.BROADCAST)
+async def broadcast_2(message: Message):
+    text_to_send = message.text
+    photo_att = None
+    if message.attachments:
+        for a in message.attachments:
+            if a.photo:
+                photo_att = f"photo{a.photo.owner_id}_{a.photo.id}"
+                break
+
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer("⏳ Рассылка отправляется...")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT user_id FROM users") as cur:
+            users = await cur.fetchall()
+
+    total = len(users)
+    success = 0
+    errors = 0
+
+    for u in users:
+        u_id = u[0]
+        try:
+            r_id = random.randint(100000, 999999999)
+            if photo_att:
+                await api.messages.send(user_id=u_id, message=text_to_send, attachment=photo_att, random_id=r_id)
+            else:
+                await api.messages.send(user_id=u_id, message=text_to_send, random_id=r_id)
+            success += 1
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            errors += 1
+
+    await message.answer(
+        f"✅ Рассылка завершена!\n\n"
+        f"👥 Всего в базе: {total}\n"
+        f" Доставлено: {success}\n"
+        f"❌ Ошибок: {errors}",
+        keyboard=admin_root_kb()
+    )
