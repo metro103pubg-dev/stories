@@ -1,68 +1,199 @@
-import os
-from vkbottle import Keyboard, KeyboardButtonColor, Text, OpenLink
-from config import GROUP_ID
+from vkbottle.bot import BotLabeler, Message
+from vkbottle import Keyboard, KeyboardButtonColor, Text
+from database import DB_PATH, get_or_create_user, update_bookmark, get_setting
+from keyboards import reading_kb, hybrid_paywall_kb, coin_shop_kb, main_menu_kb
+from config import GROUP_ID, VK_TOKEN
+from vkbottle import API
+import aiosqlite
+import time
+import json
 
-# Ссылки на оплату из Railway
-LAVA_LINK_50 = os.getenv("LAVA_LINK_50", "https://lava.top")
-LAVA_LINK_99 = os.getenv("LAVA_LINK_99", "https://lava.top")
-LAVA_LINK_199 = os.getenv("LAVA_LINK_199", "https://lava.top")
-LAVA_LINK_BOOK = os.getenv("LAVA_LINK_BOOK", "https://lava.top")
+reader_labeler = BotLabeler()
+api = API(token=VK_TOKEN)
 
-def main_menu_kb():
-    kb = Keyboard(one_time=False, inline=False)
-    kb.add(Text("📖 Продолжить чтение", payload={"cmd": "continue"}), color=KeyboardButtonColor.POSITIVE)
-    kb.row()
-    kb.add(Text("📚 Каталог историй", payload={"cmd": "catalog"}))
-    kb.add(Text("🔍 Поиск", payload={"cmd": "search"}))
-    kb.row()
-    kb.add(Text("🪙 Купить монеты", payload={"cmd": "shop_coins"}), color=KeyboardButtonColor.PRIMARY)
-    kb.add(Text("👤 Профиль", payload={"cmd": "profile"}))
-    return kb
+async def check_access(user_id: int, story_id: int, chapter_num: int, is_free: int, full_price: int) -> bool:
+    if full_price == 0 or is_free == 1:
+        return True
 
-def reading_kb(story_id: int, next_chapter: int):
-    kb = Keyboard(inline=True)
-    kb.add(
-        Text("Читать дальше ➡️", payload={"cmd": "read", "story_id": story_id, "chapter": next_chapter}),
-        color=KeyboardButtonColor.PRIMARY
+    try:
+        if await api.donut.is_don(owner_id=-GROUP_ID, user_id=user_id):
+            return True
+    except Exception:
+        pass
+
+    now = int(time.time())
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM purchases WHERE user_id = ? AND story_id = ? AND (chapter_num = 0 OR chapter_num = ?)",
+            (user_id, story_id, chapter_num)
+        ) as p_cur:
+            if await p_cur.fetchone():
+                return True
+
+        async with db.execute(
+            "SELECT unlock_at FROM chapter_timers WHERE user_id = ? AND story_id = ? AND chapter_num = ?",
+            (user_id, story_id, chapter_num)
+        ) as t_cur:
+            timer = await t_cur.fetchone()
+            if timer and timer[0] <= now:
+                return True
+    return False
+
+# Витрина магазина (Монеты + VIP VK Donut)
+@reader_labeler.message(text=["🪙 Купить монеты", "🪙 Купить монеты / VIP"])
+@reader_labeler.message(payload={"cmd": "shop_coins"})
+async def shop_coins_handler(message: Message):
+    user_id = message.from_id
+    user = await get_or_create_user(user_id)
+
+    is_don = False
+    try:
+        is_don = bool(await api.donut.is_don(owner_id=-GROUP_ID, user_id=user_id))
+    except Exception:
+        pass
+
+    vip_status = "👑 Активен (VK Donut)" if is_don else "Не активен ❌"
+
+    text = (
+        f"🛒 Магазин историй и монет:\n\n"
+        f"🪙 Твой баланс: {user['coins']} монет\n"
+        f"👑 VIP-статус: {vip_status}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"👑 VIP-ПОДПИСКА (VK Donut):\n"
+        f"• Безлимитный доступ ко ВСЕМ историям и главам\n"
+        f"• Без таймеров и списания монет\n"
+        f"• Стоимость: 199 ₽ / месяц\n\n"
+        f"🪙 ПАКЕТЫ МОНЕТ (Оплата по СБП):\n"
+        f"• Для поглавной разблокировки историй\n\n"
+        f"👇 Выбирай подходящий вариант:"
     )
-    return kb
 
-def hybrid_paywall_kb(user_coins: int, story_id: int, chapter_num: int, chapter_coins: int, full_price: int):
-    kb = Keyboard(inline=True)
-    
-    # 1. Если хватает монет — моментальное открытие прямо в ВК
-    if user_coins >= chapter_coins:
-        kb.add(
-            Text(f"🪙 Открыть главу ({chapter_coins} монет)", payload={"cmd": "unlock_coin", "story_id": story_id, "chapter": chapter_num}),
-            color=KeyboardButtonColor.POSITIVE
+    await message.answer(text, keyboard=coin_shop_kb())
+
+# Открытие за монеты
+@reader_labeler.message(payload_map={"cmd": "unlock_coin", "story_id": int, "chapter": int})
+async def unlock_with_coins(message: Message):
+    payload = json.loads(message.payload)
+    story_id = payload["story_id"]
+    chapter_num = payload["chapter"]
+    user_id = message.from_id
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT coins FROM users WHERE user_id = ?", (user_id,)) as u_cur:
+            user_coins = (await u_cur.fetchone())[0]
+
+        async with db.execute("SELECT price_coins FROM chapters WHERE story_id = ? AND chapter_num = ?", (story_id, chapter_num)) as c_cur:
+            row = await c_cur.fetchone()
+            cost = row[0] if row else 15
+
+        if user_coins >= cost:
+            await db.execute("UPDATE users SET coins = coins - ? WHERE user_id = ?", (cost, user_id))
+            await db.execute("INSERT OR IGNORE INTO purchases (user_id, story_id, chapter_num) VALUES (?, ?, ?)", (user_id, story_id, chapter_num))
+            await db.commit()
+
+            await message.answer(f"🎉 Списано {cost} монет. Приятного чтения!")
+            await read_chapter_handler(message)
+        else:
+            await message.answer("❌ Недостаточно монет на балансе!", keyboard=main_menu_kb())
+
+# Чтение главы
+@reader_labeler.message(payload_map={"cmd": "read", "story_id": int, "chapter": int})
+async def read_chapter_handler(message: Message):
+    payload = json.loads(message.payload)
+    story_id = payload["story_id"]
+    chapter_num = payload["chapter"]
+    user_id = message.from_id
+
+    user = await get_or_create_user(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT title, content, photo_attachment, audio_attachment, price_coins, is_free FROM chapters WHERE story_id = ? AND chapter_num = ?",
+            (story_id, chapter_num)
+        ) as cur:
+            chapter = await cur.fetchone()
+
+        async with db.execute("SELECT title, full_price FROM stories WHERE id = ?", (story_id,)) as s_cur:
+            story = await s_cur.fetchone()
+
+    # Финал истории
+    if not chapter and story:
+        story_title, full_price = story
+        end_kb = Keyboard(inline=True)
+        end_kb.add(Text("📚 Перейти в каталог историй", payload={"cmd": "catalog"}), color=KeyboardButtonColor.POSITIVE)
+        end_kb.row()
+        end_kb.add(Text("🪙 Купить монеты / VIP", payload={"cmd": "shop_coins"}), color=KeyboardButtonColor.PRIMARY)
+
+        await message.answer(
+            f"🎉 Поздравляем! Вы дочитали историю «{story_title}» до конца!\n\n"
+            f"Понравилось? В нашем каталоге вас ждут еще десятки захватывающих историй! 📖\n\n"
+            f"Выбирайте следующую историю в каталоге 👇",
+            keyboard=end_kb
         )
-        kb.row()
+        return
+
+    if not chapter or not story:
+        await message.answer("История не найдена.", keyboard=main_menu_kb())
+        return
+
+    ch_title, content, photo, audio, price_coins, is_free = chapter
+    story_title, full_price = story
+
+    if await check_access(user_id, story_id, chapter_num, is_free, full_price):
+        await update_bookmark(user_id, story_id, chapter_num)
+        next_kb = reading_kb(story_id, chapter_num + 1)
+        text = f"📖 {story_title} — Глава {chapter_num}: {ch_title}\n\n{content}"
+
+        attachments = []
+        if photo: attachments.append(photo)
+        if audio: attachments.append(audio)
+
+        if attachments:
+            await message.answer(text, attachment=",".join(attachments), keyboard=next_kb)
+        else:
+            await message.answer(text, keyboard=next_kb)
     else:
-        kb.add(Text("🪙 Пополнить монеты (от 50 ₽)", payload={"cmd": "shop_coins"}), color=KeyboardButtonColor.PRIMARY)
-        kb.row()
+        cost_coins = price_coins or 15
+        await message.answer(
+            f"🔒 Доступ к главе {chapter_num} закрыт.\n\n"
+            f"💰 Стоимость: {cost_coins} монет\n"
+            f"🪙 У вас на балансе: {user['coins']} монет\n\n"
+            f"Выберите удобный вариант продолжения:",
+            keyboard=hybrid_paywall_kb(user['coins'], story_id, chapter_num, cost_coins, full_price)
+        )
 
-    # 2. VIP подписка VK Donut
-    donut_url = f"https://vk.com/donut/club{GROUP_ID}"
-    kb.add(OpenLink(donut_url, label="👑 VIP на всё (VK Donut)"))
-    kb.row()
+# Закладка (Продолжить чтение)
+@reader_labeler.message(text="📖 Продолжить чтение")
+@reader_labeler.message(payload={"cmd": "continue"})
+async def continue_reading(message: Message):
+    user = await get_or_create_user(message.from_id)
+    story_id = user["last_story_id"]
+    chapter_num = user["last_chapter_num"] or 1
 
-    # 3. Вся книга целиком по СБП
-    kb.add(OpenLink(LAVA_LINK_BOOK, label=f"📖 Купить всю книгу ({full_price} ₽)"))
-    kb.row()
+    if not story_id:
+        await message.answer("Вы еще не начали читать ни одну историю! Выберите в каталоге 👇", keyboard=main_menu_kb())
+        return
 
-    # 4. Бесплатный таймер ожидания
-    kb.add(
-        Text("⏳ Подождать 3 часа (бесплатно)", payload={"cmd": "start_timer", "story_id": story_id, "chapter": chapter_num}),
-        color=KeyboardButtonColor.SECONDARY
-    )
-    return kb
+    fake_payload = json.dumps({"cmd": "read", "story_id": story_id, "chapter": chapter_num})
+    message.payload = fake_payload
+    await read_chapter_handler(message)
 
-def coin_shop_kb():
-    """Витрина пакетов монет со ссылками на СБП"""
-    kb = Keyboard(inline=True)
-    kb.add(OpenLink(LAVA_LINK_50, label="🪙 50 монет — 50 ₽ (СБП)"))
-    kb.row()
-    kb.add(OpenLink(LAVA_LINK_99, label="🔥 120 монет — 99 ₽ (Хит)"))
-    kb.row()
-    kb.add(OpenLink(LAVA_LINK_199, label="💎 300 монет — 199 ₽ (Выгода)"))
-    return kb
+# Таймер ожидания
+@reader_labeler.message(payload_map={"cmd": "start_timer", "story_id": int, "chapter": int})
+async def set_timer_handler(message: Message):
+    payload = json.loads(message.payload)
+    story_id = payload["story_id"]
+    chapter_num = payload["chapter"]
+    user_id = message.from_id
+
+    hours = int(await get_setting("timer_hours", "3"))
+    unlock_at = int(time.time()) + (hours * 3600)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO chapter_timers (user_id, story_id, chapter_num, unlock_at) VALUES (?, ?, ?, ?)",
+            (user_id, story_id, chapter_num, unlock_at)
+        )
+        await db.commit()
+
+    await message.answer(f"⏳ Таймер запущен! Глава {chapter_num} откроется бесплатно через {hours} ч.", keyboard=main_menu_kb())
