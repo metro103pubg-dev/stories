@@ -1,5 +1,12 @@
+import os
 from vkbottle import Keyboard, KeyboardButtonColor, Text, OpenLink
 from config import GROUP_ID
+
+# Ссылки на оплату из Railway
+LAVA_LINK_50 = os.getenv("LAVA_LINK_50", "https://lava.top")
+LAVA_LINK_99 = os.getenv("LAVA_LINK_99", "https://lava.top")
+LAVA_LINK_199 = os.getenv("LAVA_LINK_199", "https://lava.top")
+LAVA_LINK_BOOK = os.getenv("LAVA_LINK_BOOK", "https://lava.top")
 
 def main_menu_kb():
     kb = Keyboard(one_time=False, inline=False)
@@ -20,10 +27,10 @@ def reading_kb(story_id: int, next_chapter: int):
     )
     return kb
 
-def hybrid_paywall_kb(user_coins: int, story_id: int, chapter_num: int, chapter_coins: int, full_price: int, story_pay_url: str):
+def hybrid_paywall_kb(user_coins: int, story_id: int, chapter_num: int, chapter_coins: int, full_price: int):
     kb = Keyboard(inline=True)
     
-    # 1. Если хватает монет — кнопка мгновенной покупки в чате!
+    # 1. Если хватает монет — моментальное открытие прямо в ВК
     if user_coins >= chapter_coins:
         kb.add(
             Text(f"🪙 Открыть главу ({chapter_coins} монет)", payload={"cmd": "unlock_coin", "story_id": story_id, "chapter": chapter_num}),
@@ -34,28 +41,28 @@ def hybrid_paywall_kb(user_coins: int, story_id: int, chapter_num: int, chapter_
         kb.add(Text("🪙 Пополнить монеты (от 50 ₽)", payload={"cmd": "shop_coins"}), color=KeyboardButtonColor.PRIMARY)
         kb.row()
 
-    # 2. VIP через VK Donut
+    # 2. VIP подписка VK Donut
     donut_url = f"https://vk.com/donut/club{GROUP_ID}"
     kb.add(OpenLink(donut_url, label="👑 VIP на всё (VK Donut)"))
     kb.row()
 
-    # 3. Вся книга по СБП
-    kb.add(OpenLink(story_pay_url, label=f"📖 Купить всю книгу ({full_price} ₽)"))
+    # 3. Вся книга целиком по СБП
+    kb.add(OpenLink(LAVA_LINK_BOOK, label=f"📖 Купить всю книгу ({full_price} ₽)"))
     kb.row()
 
-    # 4. Бесплатный таймер
+    # 4. Бесплатный таймер ожидания
     kb.add(
         Text("⏳ Подождать 3 часа (бесплатно)", payload={"cmd": "start_timer", "story_id": story_id, "chapter": chapter_num}),
         color=KeyboardButtonColor.SECONDARY
     )
     return kb
 
-def coin_shop_kb(url_50: str, url_120: str, url_300: str):
-    """Магазин пакетов монет"""
+def coin_shop_kb():
+    """Витрина пакетов монет со ссылками на СБП"""
     kb = Keyboard(inline=True)
-    kb.add(OpenLink(url_50, label="🪙 50 монет — 50 ₽"))
+    kb.add(OpenLink(LAVA_LINK_50, label="🪙 50 монет — 50 ₽ (СБП)"))
     kb.row()
-    kb.add(OpenLink(url_120, label="🔥 120 монет — 99 ₽ (Хит)"))
+    kb.add(OpenLink(LAVA_LINK_99, label="🔥 120 монет — 99 ₽ (Хит)"))
     kb.row()
-    kb.add(OpenLink(url_300, label="💎 300 монет — 199 ₽ (Выгода)"))
+    kb.add(OpenLink(LAVA_LINK_199, label="💎 300 монет — 199 ₽ (Выгода)"))
     return kb
