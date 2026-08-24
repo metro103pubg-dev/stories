@@ -8,7 +8,7 @@ DB_PATH = os.path.join(DATA_DIR, "bot_database.db")
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Пользователи
+        # 1. Пользователи
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -21,7 +21,7 @@ async def init_db():
             )
         """)
 
-        # Динамические жанры (без 18+)
+        # 2. Жанры
         await db.execute("""
             CREATE TABLE IF NOT EXISTS genres (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,7 +36,7 @@ async def init_db():
         ]
         await db.executemany("INSERT OR IGNORE INTO genres (name) VALUES (?)", default_genres)
 
-        # Настройки
+        # 3. Настройки экономики
         await db.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -51,7 +51,7 @@ async def init_db():
         ]
         await db.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", default_settings)
 
-        # Истории
+        # 4. Истории
         await db.execute("""
             CREATE TABLE IF NOT EXISTS stories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,7 +64,7 @@ async def init_db():
             )
         """)
 
-        # Главы
+        # 5. Главы с поддержкой концовок
         await db.execute("""
             CREATE TABLE IF NOT EXISTS chapters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,17 +76,33 @@ async def init_db():
                 audio_attachment TEXT DEFAULT NULL,
                 price_coins INTEGER DEFAULT 15,
                 is_free INTEGER DEFAULT 0,
+                is_ending INTEGER DEFAULT 0,
+                ending_title TEXT DEFAULT NULL,
                 FOREIGN KEY (story_id) REFERENCES stories(id)
             )
         """)
 
-        # Покупки и таймеры
+        # 6. Интерактивные развилки (кнопки выбора)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS choices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                story_id INTEGER,
+                from_chapter INTEGER,
+                to_chapter INTEGER,
+                choice_text TEXT,
+                is_vip_only INTEGER DEFAULT 0,
+                price_coins INTEGER DEFAULT 0
+            )
+        """)
+
+        # 7. Покупки и таймеры
         await db.execute("CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, story_id INTEGER, chapter_num INTEGER, PRIMARY KEY (user_id, story_id, chapter_num))")
         await db.execute("CREATE TABLE IF NOT EXISTS chapter_timers (user_id INTEGER, story_id INTEGER, chapter_num INTEGER, unlock_at INTEGER, PRIMARY KEY (user_id, story_id, chapter_num))")
 
         await db.commit()
 
-# Хелперы
+# --- Хелперы работы с пользователями ---
+
 async def get_or_create_user(user_id: int, referrer_id: int = None):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cur:
@@ -110,6 +126,38 @@ async def update_bookmark(user_id: int, story_id: int, chapter_num: int):
             "UPDATE users SET last_story_id = ?, last_chapter_num = ? WHERE user_id = ?",
             (story_id, chapter_num, user_id)
         )
+        await db.commit()
+
+async def get_chapter_choices(story_id: int, chapter_num: int):
+    """Получить список развилок главы"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id, to_chapter, choice_text, is_vip_only, price_coins FROM choices WHERE story_id = ? AND from_chapter = ?",
+            (story_id, chapter_num)
+        ) as cur:
+            return await cur.fetchall()
+
+# Админ-функции выдачи:
+async def admin_give_coins(user_id: int, amount: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET coins = coins + ? WHERE user_id = ?", (amount, user_id))
+        await db.commit()
+
+async def admin_give_vip(user_id: int, days: int = 30):
+    now = int(time.time())
+    vip_time = now + (days * 86400)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET vip_until = ? WHERE user_id = ?", (vip_time, user_id))
+        await db.commit()
+
+async def admin_give_story(user_id: int, story_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR IGNORE INTO purchases (user_id, story_id, chapter_num) VALUES (?, ?, 0)", (user_id, story_id))
+        await db.commit()
+
+async def admin_give_chapter(user_id: int, story_id: int, chapter_num: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR IGNORE INTO purchases (user_id, story_id, chapter_num) VALUES (?, ?, ?)", (user_id, story_id, chapter_num))
         await db.commit()
 
 async def get_setting(key: str, default: str = "") -> str:
