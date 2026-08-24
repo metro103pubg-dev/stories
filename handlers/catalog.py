@@ -20,7 +20,7 @@ async def catalog_genres(message: Message):
         kb.row()
     await message.answer("📚 Выберите жанр историй:", keyboard=kb)
 
-# Истории по жанру
+# Истории по жанру (Отображаем ID перед названием)
 @catalog_labeler.message(payload_map={"cmd": "view_genre", "genre": str})
 async def view_genre_stories(message: Message):
     import json
@@ -36,8 +36,8 @@ async def view_genre_stories(message: Message):
 
     kb = Keyboard(inline=True)
     for s_id, s_title, s_price in stories:
-        # Если цена 0 — вешаем значок Лид-магнита
-        badge = "🎁 [БЕСПЛАТНО]" if s_price == 0 else f"📖 [{s_price} ₽]"
+        # Отображаем ID и тип (Бесплатно / Цена)
+        badge = f"[ID: {s_id}] 🎁 [БЕСПЛАТНО]" if s_price == 0 else f"[ID: {s_id}] 📖 [{s_price} ₽]"
         kb.add(Text(f"{badge} {s_title}", payload={"cmd": "story_card", "story_id": s_id}))
         kb.row()
 
@@ -64,7 +64,7 @@ async def story_card(message: Message):
     kb.add(Text("Начать читать ➡️", payload={"cmd": "read", "story_id": story_id, "chapter": 1}), color=KeyboardButtonColor.POSITIVE)
 
     await message.answer(
-        f"📖 *{title}*\n"
+        f"📖 [ID: {story_id}] *{title}*\n"
         f"🏷️ Жанр: {genre}\n"
         f"💰 Стоимость: {price_label}\n\n"
         f"{desc}",
@@ -93,7 +93,7 @@ async def search_process(message: Message):
 
     kb = Keyboard(inline=True)
     for s_id, s_title, s_price in results:
-        badge = "🎁" if s_price == 0 else "📖"
+        badge = f"[ID: {s_id}] 🎁" if s_price == 0 else f"[ID: {s_id}] 📖"
         kb.add(Text(f"{badge} {s_title}", payload={"cmd": "story_card", "story_id": s_id}))
         kb.row()
 
