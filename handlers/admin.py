@@ -68,11 +68,24 @@ def admin_root_kb():
     kb.add(Text("🔙 Главное меню", payload={"cmd": "main_menu"}))
     return kb
 
+def cancel_kb():
+    """Кнопка отмены текущего действия"""
+    kb = Keyboard(inline=False)
+    kb.add(Text("❌ Отмена", payload={"adm": "cancel"}), color=KeyboardButtonColor.NEGATIVE)
+    return kb
+
 @admin_labeler.message(text=["/admin", "админка", "Админка"])
 async def admin_panel(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await get_or_create_user(message.from_id)
     await message.answer("🛠 Панель управления ботом:", keyboard=admin_root_kb())
+
+# Универсальная отмена любого действия
+@admin_labeler.message(text=["❌ Отмена", "Отмена", "отмена", "/cancel"])
+@admin_labeler.message(payload={"adm": "cancel"})
+async def admin_cancel_handler(message: Message):
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer("❌ Действие отменено. Возврат в панель администратора:", keyboard=admin_root_kb())
 
 # Выход в главное меню
 @admin_labeler.message(text="🔙 Главное меню")
@@ -86,39 +99,43 @@ async def back_to_main_user_menu(message: Message):
 async def choice_step1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CHOICE_STORY)
-    await message.answer("🔀 Введите ID истории (число), в которую добавляем развилку:")
+    await message.answer("🔀 Введите ID истории (число), в которую добавляем развилку:", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CHOICE_STORY)
 async def choice_step2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit():
-        await message.answer("Введите число!")
+        await message.answer("Введите число!", keyboard=cancel_kb())
         return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CHOICE_FROM, s_id=int(message.text))
-    await message.answer("В какой главе показывать кнопку выбора? (номер главы, например: 2):")
+    await message.answer("В какой главе показывать кнопку выбора? (номер главы, например: 2):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CHOICE_FROM)
 async def choice_step3(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit():
-        await message.answer("Введите число!")
+        await message.answer("Введите число!", keyboard=cancel_kb())
         return
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CHOICE_TO, s_id=state.payload["s_id"], from_ch=int(message.text))
-    await message.answer("На какую главу должен перевести этот выбор? (номер целевой главы, например: 3):")
+    await message.answer("На какую главу должен перевести этот выбор? (номер целевой главы, например: 3):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CHOICE_TO)
 async def choice_step4(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit():
-        await message.answer("Введите число!")
+        await message.answer("Введите число!", keyboard=cancel_kb())
         return
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     await admin_labeler.state_dispenser.set(
         message.peer_id, AdminState.CHOICE_TEXT,
         s_id=state.payload["s_id"], from_ch=state.payload["from_ch"], to_ch=int(message.text)
     )
-    await message.answer("Введите текст кнопки выбора (например: 🚪 Открыть дверь подвала):")
+    await message.answer("Введите текст кнопки выбора (например: 🚪 Открыть дверь подвала):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CHOICE_TEXT)
 async def choice_step5(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     await admin_labeler.state_dispenser.set(
         message.peer_id, AdminState.CHOICE_VIP,
@@ -131,6 +148,7 @@ async def choice_step5(message: Message):
 
 @admin_labeler.message(state=AdminState.CHOICE_VIP)
 async def choice_step6(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     import json
     is_vip = 0
     if message.payload:
@@ -157,12 +175,13 @@ async def choice_step6(message: Message):
 async def user_mgr_step1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.USER_LOOKUP)
-    await message.answer("👤 Введите цифровой VK ID читателя (например: 123456789):")
+    await message.answer("👤 Введите цифровой VK ID читателя (например: 123456789):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.USER_LOOKUP)
 async def user_mgr_card(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit():
-        await message.answer("Пожалуйста, введите корректный цифровой ID:")
+        await message.answer("Пожалуйста, введите корректный цифровой ID:", keyboard=cancel_kb())
         return
 
     target_id = int(message.text)
@@ -204,12 +223,13 @@ async def act_give_coins(message: Message):
     import json
     uid = json.loads(message.payload)["uid"]
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.USER_GIVE_COINS, target_uid=uid)
-    await message.answer(f"Сколько монет начислить пользователю {uid}? (введите число, например: 50):")
+    await message.answer(f"Сколько монет начислить пользователю {uid}? (введите число, например: 50):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.USER_GIVE_COINS)
 async def act_give_coins_finish(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit():
-        await message.answer("Введите число монет:")
+        await message.answer("Введите число монет:", keyboard=cancel_kb())
         return
     coins = int(message.text)
     state = await admin_labeler.state_dispenser.get(message.peer_id)
@@ -241,12 +261,13 @@ async def act_give_story(message: Message):
     import json
     uid = json.loads(message.payload)["uid"]
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.USER_GIVE_STORY, target_uid=uid)
-    await message.answer(f"Введите ID истории, которую хотите открыть читателю {uid}:")
+    await message.answer(f"Введите ID истории, которую хотите открыть читателю {uid}:", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.USER_GIVE_STORY)
 async def act_give_story_finish(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit():
-        await message.answer("Введите ID истории (число):")
+        await message.answer("Введите ID истории (число):", keyboard=cancel_kb())
         return
     s_id = int(message.text)
     state = await admin_labeler.state_dispenser.get(message.peer_id)
@@ -266,13 +287,14 @@ async def act_give_ch(message: Message):
     import json
     uid = json.loads(message.payload)["uid"]
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.USER_GIVE_CH, target_uid=uid)
-    await message.answer(f"Введите через пробел: ID истории и номер главы для выдачи (например: 1 3):")
+    await message.answer(f"Введите через пробел: ID истории и номер главы для выдачи (например: 1 3):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.USER_GIVE_CH)
 async def act_give_ch_finish(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     parts = message.text.strip().split()
     if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
-        await message.answer("Введите два числа через пробел (например: 1 3):")
+        await message.answer("Введите два числа через пробел (например: 1 3):", keyboard=cancel_kb())
         return
     s_id = int(parts[0])
     ch_num = int(parts[1])
@@ -295,10 +317,11 @@ async def act_give_ch_finish(message: Message):
 async def add_story_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.STORY_TITLE)
-    await message.answer("Введите название новой истории:")
+    await message.answer("Введите название новой истории:", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.STORY_TITLE)
 async def add_story_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.STORY_GENRE, title=message.text)
     genres = await get_all_genres()
     kb = Keyboard(inline=True)
@@ -308,23 +331,26 @@ async def add_story_2(message: Message):
 
 @admin_labeler.message(state=AdminState.STORY_GENRE)
 async def add_story_3(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.STORY_DESC, title=state.payload["title"], genre=message.text)
-    await message.answer("Введите описание сюжета (аннотацию):")
+    await message.answer("Введите описание сюжета (аннотацию):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.STORY_DESC)
 async def add_story_4(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     await admin_labeler.state_dispenser.set(
         message.peer_id, AdminState.STORY_PRICE,
         title=state.payload["title"], genre=state.payload["genre"], desc=message.text
     )
-    await message.answer("Укажите цену всей книги (или 0, если это бесплатный Лид-магнит):")
+    await message.answer("Укажите цену всей книги (или 0, если это бесплатный Лид-магнит):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.STORY_PRICE)
 async def add_story_5(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit():
-        await message.answer("Введите число!")
+        await message.answer("Введите число!", keyboard=cancel_kb())
         return
     price = int(message.text)
     state = await admin_labeler.state_dispenser.get(message.peer_id)
@@ -338,7 +364,7 @@ async def add_story_5(message: Message):
         await db.commit()
 
     await admin_labeler.state_dispenser.delete(message.peer_id)
-    await message.answer(f"✅ История «{state.payload['title']}» успешно создана!\nID истории: {s_id}", keyboard=admin_root_kb())
+    await message.answer(f"✅ История [ID: {s_id}] «{state.payload['title']}» успешно создана!", keyboard=admin_root_kb())
 
 # Добавление главы
 @admin_labeler.message(text="📝 Добавить главу")
@@ -346,36 +372,40 @@ async def add_story_5(message: Message):
 async def add_ch_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CH_STORY_ID)
-    await message.answer("Введите ID истории (цифру), к которой добавляем главу:")
+    await message.answer("Введите ID истории (цифру), к которой добавляем главу:", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CH_STORY_ID)
 async def add_ch_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit():
-        await message.answer("Введите число!")
+        await message.answer("Введите число!", keyboard=cancel_kb())
         return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CH_NUM, story_id=int(message.text))
-    await message.answer("Введите номер главы (например: 1, 2, 3):")
+    await message.answer("Введите номер главы (например: 1, 2, 3):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CH_NUM)
 async def add_ch_3(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit():
-        await message.answer("Введите число!")
+        await message.answer("Введите число!", keyboard=cancel_kb())
         return
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CH_TITLE, story_id=state.payload["story_id"], ch_num=int(message.text))
-    await message.answer("Введите название главы:")
+    await message.answer("Введите название главы:", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CH_TITLE)
 async def add_ch_4(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     await admin_labeler.state_dispenser.set(
         message.peer_id, AdminState.CH_TEXT,
         story_id=state.payload["story_id"], ch_num=state.payload["ch_num"], ch_title=message.text
     )
-    await message.answer("Отправьте текст главы (можно прикрепить фото):")
+    await message.answer("Отправьте текст главы (можно прикрепить фото):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CH_TEXT)
 async def add_ch_5(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     photo_att = None
     if message.attachments:
@@ -396,6 +426,7 @@ async def add_ch_5(message: Message):
 
 @admin_labeler.message(state=AdminState.CH_FREE)
 async def add_ch_6(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     import json
     is_free = 1
     if message.payload:
@@ -417,6 +448,7 @@ async def add_ch_6(message: Message):
 
 @admin_labeler.message(state=AdminState.CH_IS_END)
 async def add_ch_7(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     import json
     is_end = 0
     if message.payload:
@@ -434,7 +466,7 @@ async def add_ch_7(message: Message):
             ch_title=state.payload["ch_title"], text=state.payload["text"],
             photo=state.payload["photo"], is_free=state.payload["is_free"], is_ending=1
         )
-        await message.answer("Введите название этой концовки (например: Концовка 1 из 3: Трагический финал):")
+        await message.answer("Введите название этой концовки (например: Концовка 1 из 3: Трагический финал):", keyboard=cancel_kb())
     else:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
@@ -448,6 +480,7 @@ async def add_ch_7(message: Message):
 
 @admin_labeler.message(state=AdminState.CH_END_TITLE)
 async def add_ch_8(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     end_title = message.text
 
@@ -476,10 +509,11 @@ async def del_story_1(message: Message):
     for s_id, s_title in stories: text += f"• [ID: {s_id}] {s_title}\n"
     text += "\nВведите ID истории для удаления:"
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.DEL_STORY)
-    await message.answer(text)
+    await message.answer(text, keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.DEL_STORY)
 async def del_story_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit(): return
     s_id = int(message.text)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -495,10 +529,11 @@ async def del_story_2(message: Message):
 async def del_ch_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.DEL_CHAPTER)
-    await message.answer("Введите через пробел ID истории и номер главы для удаления (например: 1 2):")
+    await message.answer("Введите через пробел ID истории и номер главы для удаления (например: 1 2):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.DEL_CHAPTER)
 async def del_ch_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     parts = message.text.strip().split()
     if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit(): return
     s_id = int(parts[0])
@@ -515,10 +550,11 @@ async def del_ch_2(message: Message):
 async def gen_link_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.GEN_LINK)
-    await message.answer("Введите через пробел ID истории и номер главы (например: 1 2):")
+    await message.answer("Введите через пробел ID истории и номер главы (например: 1 2):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.GEN_LINK)
 async def gen_link_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     parts = message.text.strip().split()
     if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit(): return
     s_id, ch_num = parts[0], parts[1]
@@ -541,10 +577,11 @@ async def stats(message: Message):
 async def broadcast_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.BROADCAST)
-    await message.answer("Введите текст рассылки (можно прикрепить фото):")
+    await message.answer("Введите текст рассылки (можно прикрепить фото):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.BROADCAST)
 async def broadcast_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     text_to_send = message.text
     photo_att = None
     if message.attachments:
@@ -587,10 +624,11 @@ async def admin_genres_view(message: Message):
 async def add_genre_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.ADD_GENRE)
-    await message.answer("Введите название нового жанра:")
+    await message.answer("Введите название нового жанра:", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.ADD_GENRE)
 async def add_genre_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     await add_genre_db(message.text)
     await admin_labeler.state_dispenser.delete(message.peer_id)
     await message.answer(f"✅ Жанр «{message.text}» добавлен!", keyboard=admin_root_kb())
@@ -600,10 +638,11 @@ async def add_genre_2(message: Message):
 async def del_genre_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.DEL_GENRE)
-    await message.answer("Введите ID жанра для удаления:")
+    await message.answer("Введите ID жанра для удаления:", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.DEL_GENRE)
 async def del_genre_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit(): return
     await delete_genre_db(int(message.text))
     await admin_labeler.state_dispenser.delete(message.peer_id)
@@ -626,10 +665,11 @@ async def admin_settings_view(message: Message):
 async def set_timer_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.SET_TIMER)
-    await message.answer("Сколько часов ждать бесплатную главу? (число):")
+    await message.answer("Сколько часов ждать бесплатную главу? (число):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.SET_TIMER)
 async def set_timer_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit(): return
     await set_setting("timer_hours", message.text)
     await admin_labeler.state_dispenser.delete(message.peer_id)
@@ -640,10 +680,11 @@ async def set_timer_2(message: Message):
 async def set_ref_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.SET_REF)
-    await message.answer("Сколько монет давать за друга? (число):")
+    await message.answer("Сколько монет давать за друга? (число):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.SET_REF)
 async def set_ref_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     if not message.text.isdigit(): return
     await set_setting("ref_coins", message.text)
     await admin_labeler.state_dispenser.delete(message.peer_id)
