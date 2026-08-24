@@ -10,21 +10,21 @@ admin_labeler = BotLabeler()
 api = API(token=VK_TOKEN)
 
 class AdminState(BaseStateGroup):
-    ADD_GENRE = 0
-    DEL_GENRE = 1
-    SET_TIMER = 2
-    SET_REF = 3
-    STORY_TITLE = 4
-    STORY_GENRE = 5
-    STORY_DESC = 6
-    STORY_PRICE = 7
-    CH_STORY_ID = 8
-    CH_NUM = 9
-    CH_TITLE = 10
-    CH_TEXT = 11
-    CH_FREE = 12
-    BROADCAST = 13
-    GEN_LINK = 14
+    ADD_GENRE = "add_genre"
+    DEL_GENRE = "del_genre"
+    SET_TIMER = "set_timer"
+    SET_REF = "set_ref"
+    STORY_TITLE = "story_title"
+    STORY_GENRE = "story_genre"
+    STORY_DESC = "story_desc"
+    STORY_PRICE = "story_price"
+    CH_STORY_ID = "ch_story_id"
+    CH_NUM = "ch_num"
+    CH_TITLE = "ch_title"
+    CH_TEXT = "ch_text"
+    CH_FREE = "ch_free"
+    BROADCAST = "broadcast"
+    GEN_LINK = "gen_link"
 
 def admin_root_kb():
     kb = Keyboard(inline=False)
@@ -49,11 +49,58 @@ async def admin_panel(message: Message):
     await message.answer("🛠 Панель управления ботом:", keyboard=admin_root_kb())
 
 # Выход в главное меню
+@admin_labeler.message(text="🔙 Главное меню")
 @admin_labeler.message(payload={"cmd": "main_menu"})
 async def back_to_main_user_menu(message: Message):
     await message.answer("Вы вернулись в главное меню читателя 👇", keyboard=main_menu_kb())
 
-# --- ⚙️ РАЗДЕЛ: ЭКОНОМИКА И НАСТРОЙКИ ---
+# --- 🏷️ РАЗДЕЛ: ЖАНРЫ ---
+@admin_labeler.message(text="🏷️ Жанры")
+@admin_labeler.message(payload={"adm": "menu_genres"})
+async def admin_genres_view(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    genres = await get_all_genres()
+    text = "🏷️ Список активных жанров:\n\n"
+    for g_id, g_name in genres:
+        text += f"• [{g_id}] {g_name}\n"
+    
+    kb = Keyboard(inline=True)
+    kb.add(Text("➕ Добавить жанр", payload={"adm": "add_genre"}), color=KeyboardButtonColor.POSITIVE)
+    kb.add(Text("🗑️ Удалить жанр", payload={"adm": "del_genre"}), color=KeyboardButtonColor.NEGATIVE)
+    
+    await message.answer(text, keyboard=kb)
+
+@admin_labeler.message(text="➕ Добавить жанр")
+@admin_labeler.message(payload={"adm": "add_genre"})
+async def add_genre_1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.ADD_GENRE)
+    await message.answer("Введите название нового жанра (например: 🛸 Фантастика):")
+
+@admin_labeler.message(state=AdminState.ADD_GENRE)
+async def add_genre_2(message: Message):
+    await add_genre_db(message.text)
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer(f"✅ Жанр «{message.text}» успешно добавлен!", keyboard=admin_root_kb())
+
+@admin_labeler.message(text="🗑️ Удалить жанр")
+@admin_labeler.message(payload={"adm": "del_genre"})
+async def del_genre_1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.DEL_GENRE)
+    await message.answer("Введите ID жанра (цифру в скобках), который хотите удалить:")
+
+@admin_labeler.message(state=AdminState.DEL_GENRE)
+async def del_genre_2(message: Message):
+    if not message.text.isdigit():
+        await message.answer("Введите число (ID жанра)!")
+        return
+    await delete_genre_db(int(message.text))
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer("🗑️ Жанр успешно удален!", keyboard=admin_root_kb())
+
+# --- ⚙️ РАЗДЕЛ: ЭКОНОМИКА ---
+@admin_labeler.message(text="⚙️ Экономика")
 @admin_labeler.message(payload={"adm": "menu_settings"})
 async def admin_settings_view(message: Message):
     if message.from_id not in ADMIN_IDS: return
@@ -72,6 +119,7 @@ async def admin_settings_view(message: Message):
         keyboard=kb
     )
 
+@admin_labeler.message(text="⏳ Изменить таймер")
 @admin_labeler.message(payload={"adm": "set_timer"})
 async def set_timer_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
@@ -87,6 +135,7 @@ async def set_timer_2(message: Message):
     await admin_labeler.state_dispenser.delete(message.peer_id)
     await message.answer(f"✅ Время таймера изменено на {message.text} ч.!", keyboard=admin_root_kb())
 
+@admin_labeler.message(text="🎁 Изменить награду за друга")
 @admin_labeler.message(payload={"adm": "set_ref"})
 async def set_ref_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
@@ -102,49 +151,8 @@ async def set_ref_2(message: Message):
     await admin_labeler.state_dispenser.delete(message.peer_id)
     await message.answer(f"✅ Награда за реферала изменена на {message.text} монет!", keyboard=admin_root_kb())
 
-# --- 🏷️ РАЗДЕЛ: ЖАНРЫ ---
-@admin_labeler.message(payload={"adm": "menu_genres"})
-async def admin_genres_view(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    genres = await get_all_genres()
-    text = "🏷️ Список активных жанров:\n\n"
-    for g_id, g_name in genres:
-        text += f"• [{g_id}] {g_name}\n"
-    
-    kb = Keyboard(inline=True)
-    kb.add(Text("➕ Добавить жанр", payload={"adm": "add_genre"}), color=KeyboardButtonColor.POSITIVE)
-    kb.add(Text("🗑️ Удалить жанр", payload={"adm": "del_genre"}), color=KeyboardButtonColor.NEGATIVE)
-    
-    await message.answer(text, keyboard=kb)
-
-@admin_labeler.message(payload={"adm": "add_genre"})
-async def add_genre_1(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.ADD_GENRE)
-    await message.answer("Введите название нового жанра (например: 🛸 Фантастика):")
-
-@admin_labeler.message(state=AdminState.ADD_GENRE)
-async def add_genre_2(message: Message):
-    await add_genre_db(message.text)
-    await admin_labeler.state_dispenser.delete(message.peer_id)
-    await message.answer(f"✅ Жанр «{message.text}» успешно добавлен!", keyboard=admin_root_kb())
-
-@admin_labeler.message(payload={"adm": "del_genre"})
-async def del_genre_1(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.DEL_GENRE)
-    await message.answer("Введите ID жанра (цифру в скобках), который хотите удалить:")
-
-@admin_labeler.message(state=AdminState.DEL_GENRE)
-async def del_genre_2(message: Message):
-    if not message.text.isdigit():
-        await message.answer("Введите число (ID жанра)!")
-        return
-    await delete_genre_db(int(message.text))
-    await admin_labeler.state_dispenser.delete(message.peer_id)
-    await message.answer("🗑️ Жанр успешно удален!", keyboard=admin_root_kb())
-
-# --- 🔗 ГЕНЕРАТОР ССЫЛОК ДЛЯ РЕКЛАМЫ ---
+# --- 🔗 ГЕНЕРАТОР ССЫЛОК ---
+@admin_labeler.message(text="🔗 Ссылка для рекламы")
 @admin_labeler.message(payload={"adm": "gen_link"})
 async def gen_link_step1(message: Message):
     if message.from_id not in ADMIN_IDS: return
@@ -166,16 +174,10 @@ async def gen_link_step2(message: Message):
     await admin_labeler.state_dispenser.delete(message.peer_id)
 
     link = f"https://vk.me/club{GROUP_ID}?ref=story_{s_id}_{ch_num}"
-
-    text = (
-        f"🔗 Ваша готовая ссылка для рекламного поста:\n\n"
-        f"{link}\n\n"
-        f"📋 Вставьте её в пост в ВК, ОК или Дзен.\n"
-        f"Читатель перейдет и сразу начнет читать Главу {ch_num} истории #{s_id}!"
-    )
-    await message.answer(text, keyboard=admin_root_kb())
+    await message.answer(f"🔗 Ваша готовая ссылка:\n\n{link}\n\nВставьте её в рекламный пост!", keyboard=admin_root_kb())
 
 # --- 📊 СТАТИСТИКА ---
+@admin_labeler.message(text="📊 Статистика")
 @admin_labeler.message(payload={"adm": "stats"})
 async def stats(message: Message):
     if message.from_id not in ADMIN_IDS: return
@@ -183,9 +185,10 @@ async def stats(message: Message):
         async with db.execute("SELECT COUNT(*) FROM users") as u: total_u = (await u.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM stories") as s: total_s = (await s.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM purchases") as p: total_p = (await p.fetchone())[0]
-    await message.answer(f"📊 Статистика:\n\n👤 Читателей в базе: {total_u}\n📚 Историй: {total_s}\n💰 Покупок: {total_p}", keyboard=admin_root_kb())
+    await message.answer(f"📊 Статистика:\n\n👤 Читателей: {total_u}\n📚 Историй: {total_s}\n💰 Покупок: {total_p}", keyboard=admin_root_kb())
 
 # --- ➕ СОЗДАНИЕ ИСТОРИИ ---
+@admin_labeler.message(text="➕ Создать историю")
 @admin_labeler.message(payload={"adm": "add_story"})
 async def add_story_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
@@ -214,7 +217,7 @@ async def add_story_4(message: Message):
         message.peer_id, AdminState.STORY_PRICE,
         title=state.payload["title"], genre=state.payload["genre"], desc=message.text
     )
-    await message.answer("Укажите цену покупки всей истории целиком в рублях (например: 149):")
+    await message.answer("Укажите цену покупки всей истории в рублях (например: 149):")
 
 @admin_labeler.message(state=AdminState.STORY_PRICE)
 async def add_story_5(message: Message):
@@ -236,6 +239,7 @@ async def add_story_5(message: Message):
     await message.answer(f"✅ История «{state.payload['title']}» успешно создана!\nID истории: {s_id}", keyboard=admin_root_kb())
 
 # --- 📝 ДОБАВЛЕНИЕ ГЛАВЫ ---
+@admin_labeler.message(text="📝 Добавить главу")
 @admin_labeler.message(payload={"adm": "add_chapter"})
 async def add_ch_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
@@ -291,7 +295,15 @@ async def add_ch_5(message: Message):
 @admin_labeler.message(state=AdminState.CH_FREE)
 async def add_ch_6(message: Message):
     import json
-    is_free = 1 if (message.payload and json.loads(message.payload).get("free") == 1) else 0
+    is_free = 1
+    if message.payload:
+        try:
+            is_free = json.loads(message.payload).get("free", 1)
+        except Exception:
+            pass
+    elif "Нет" in message.text:
+        is_free = 0
+
     state = await admin_labeler.state_dispenser.get(message.peer_id)
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -305,6 +317,7 @@ async def add_ch_6(message: Message):
     await message.answer(f"✅ Глава {state.payload['ch_num']} успешно сохранена!", keyboard=admin_root_kb())
 
 # --- 📢 РАССЫЛКА ---
+@admin_labeler.message(text="📢 Рассылка")
 @admin_labeler.message(payload={"adm": "broadcast"})
 async def broadcast_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
