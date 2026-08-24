@@ -16,30 +16,23 @@ from handlers.admin import admin_labeler
 bot = Bot(token=VK_TOKEN)
 api = API(token=VK_TOKEN)
 
-# Подключаем модули
+# Синхронизируем единый диспетчер состояний (FSM)
+admin_labeler.state_dispenser = bot.state_dispenser
+catalog_labeler.state_dispenser = bot.state_dispenser
+reader_labeler.state_dispenser = bot.state_dispenser
+
+# Загружаем модули
+bot.labeler.load(admin_labeler)
 bot.labeler.load(catalog_labeler)
 bot.labeler.load(reader_labeler)
 bot.labeler.load(profile_labeler)
-bot.labeler.load(admin_labeler)
 
-# Главный обработчик на любые сообщения (с выводом в лог)
-@bot.on.message()
-async def default_handler(message: Message):
+# Обработчик команды "Начать" / "Меню"
+@bot.on.message(text=["Начать", "начать", "Start", "start", "Меню", "меню"])
+async def start_handler(message: Message):
     user_id = message.from_id
-    print(f"📩 [ВК СООБЩЕНИЕ] Получено: '{message.text}' от ID: {user_id}")
-
-    # Если админ пишет команду админки
-    if message.text in ["/admin", "админка", "Админка"]:
-        if user_id in ADMIN_IDS:
-            from handlers.admin import admin_root_kb
-            await message.answer("🛠 Панель управления ботом:", keyboard=admin_root_kb())
-            return
-        else:
-            await message.answer(f"❌ Доступ закрыт. Твой ID: {user_id}")
-            return
-
-    # Проверяем Deep-link рефералок / историй
     ref_payload = None
+
     if message.payload:
         try:
             payload_data = json.loads(message.payload)
