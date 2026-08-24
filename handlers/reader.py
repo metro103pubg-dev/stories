@@ -2,7 +2,6 @@ from vkbottle.bot import BotLabeler, Message
 from database import DB_PATH, get_or_create_user, update_bookmark, get_setting
 from keyboards import reading_kb, hybrid_paywall_kb, coin_shop_kb, main_menu_kb
 from config import GROUP_ID, VK_TOKEN
-from lava_pay import create_lava_payment
 from vkbottle import API
 import aiosqlite
 import time
@@ -38,21 +37,16 @@ async def check_access(user_id: int, story_id: int, chapter_num: int, is_free: i
                 return True
     return False
 
-# Магазин монет (витрина пакетов)
+# Магазин монет
 @reader_labeler.message(payload={"cmd": "shop_coins"})
 async def shop_coins_handler(message: Message):
-    user_id = message.from_id
-    url_50 = await create_lava_payment(user_id, 50, "coins", 1, coins=50)
-    url_120 = await create_lava_payment(user_id, 99, "coins", 2, coins=120)
-    url_300 = await create_lava_payment(user_id, 199, "coins", 3, coins=300)
-
     await message.answer(
         "🪙 Пополнение баланса монет через СБП:\n\n"
-        "Выберите удобный пакет:",
-        keyboard=coin_shop_kb(url_50, url_120, url_300)
+        "Выберите удобный пакет монет 👇",
+        keyboard=coin_shop_kb()
     )
 
-# Открытие главы за монеты в 1 клик
+# Открытие за монеты в 1 клик
 @reader_labeler.message(payload_map={"cmd": "unlock_coin", "story_id": int, "chapter": int})
 async def unlock_with_coins(message: Message):
     payload = json.loads(message.payload)
@@ -69,7 +63,6 @@ async def unlock_with_coins(message: Message):
             cost = row[0] if row else 15
 
         if user_coins >= cost:
-            # Списываем монеты и выдаем главу
             await db.execute("UPDATE users SET coins = coins - ? WHERE user_id = ?", (cost, user_id))
             await db.execute("INSERT OR IGNORE INTO purchases (user_id, story_id, chapter_num) VALUES (?, ?, ?)", (user_id, story_id, chapter_num))
             await db.commit()
@@ -120,16 +113,13 @@ async def read_chapter_handler(message: Message):
         else:
             await message.answer(text, keyboard=next_kb)
     else:
-        # Пейволл с балансом монет
-        story_pay_url = await create_lava_payment(user_id, full_price, "story", story_id)
         cost_coins = price_coins or 15
-
         await message.answer(
             f"🔒 Доступ к главе {chapter_num} закрыт.\n\n"
             f"💰 Стоимость: {cost_coins} монет\n"
             f"🪙 У вас на балансе: {user['coins']} монет\n\n"
-            f"Выберите удобный вариант:",
-            keyboard=hybrid_paywall_kb(user['coins'], story_id, chapter_num, cost_coins, full_price, story_pay_url)
+            f"Выберите удобный вариант продолжения:",
+            keyboard=hybrid_paywall_kb(user['coins'], story_id, chapter_num, cost_coins, full_price)
         )
 
 # Закладка (Продолжить чтение)
