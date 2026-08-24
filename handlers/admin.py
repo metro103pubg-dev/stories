@@ -1,9 +1,11 @@
 from vkbottle.bot import BotLabeler, Message
 from vkbottle import Keyboard, KeyboardButtonColor, Text, BaseStateGroup
 import aiosqlite
+import random
+import asyncio
 from config import ADMIN_IDS, VK_TOKEN, GROUP_ID
 from vkbottle import API
-from database import DB_PATH, get_all_genres, add_genre_db, delete_genre_db, get_setting, set_setting
+from database import DB_PATH, get_all_genres, add_genre_db, delete_genre_db, get_setting, set_setting, get_or_create_user
 from keyboards import main_menu_kb
 
 admin_labeler = BotLabeler()
@@ -46,6 +48,7 @@ async def admin_panel(message: Message):
     if message.from_id not in ADMIN_IDS:
         await message.answer("❌ У вас нет доступа к админ-панели.")
         return
+    await get_or_create_user(message.from_id)
     await message.answer("🛠 Панель управления ботом:", keyboard=admin_root_kb())
 
 # Выход в главное меню
@@ -53,6 +56,60 @@ async def admin_panel(message: Message):
 @admin_labeler.message(payload={"cmd": "main_menu"})
 async def back_to_main_user_menu(message: Message):
     await message.answer("Вы вернулись в главное меню читателя 👇", keyboard=main_menu_kb())
+
+# --- 📢 РАССЫЛКА С ПОЛНЫМ ОТЧЕТОМ ---
+@admin_labeler.message(text="📢 Рассылка")
+@admin_labeler.message(payload={"adm": "broadcast"})
+async def broadcast_1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.BROADCAST)
+    await message.answer(
+        "📢 Введите текст сообщения для рассылки всем читателям бота:\n\n"
+        "(Можно прикрепить фото к сообщению)"
+    )
+
+@admin_labeler.message(state=AdminState.BROADCAST)
+async def broadcast_2(message: Message):
+    text_to_send = message.text
+    photo_att = None
+    if message.attachments:
+        for a in message.attachments:
+            if a.photo:
+                photo_att = f"photo{a.photo.owner_id}_{a.photo.id}"
+                break
+
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer("⏳ Рассылка запущена, отправляем...")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT user_id FROM users") as cur:
+            users = await cur.fetchall()
+
+    total = len(users)
+    success = 0
+    errors = 0
+
+    for u in users:
+        u_id = u[0]
+        try:
+            r_id = random.randint(100000, 999999999)
+            if photo_att:
+                await api.messages.send(user_id=u_id, message=text_to_send, attachment=photo_att, random_id=r_id)
+            else:
+                await api.messages.send(user_id=u_id, message=text_to_send, random_id=r_id)
+            success += 1
+            await asyncio.sleep(0.05)  # Защита от лимитов ВК
+        except Exception as e:
+            errors += 1
+            print(f"Ошибка отправки пользователю {u_id}: {e}")
+
+    await message.answer(
+        f"✅ Рассылка завершена!\n\n"
+        f"👥 Всего в базе: {total}\n"
+        f" Доставлено: {success}\n"
+        f"❌ Ошибок (заблокировали бота): {errors}",
+        keyboard=admin_root_kb()
+    )
 
 # --- 🏷️ РАЗДЕЛ: ЖАНРЫ ---
 @admin_labeler.message(text="🏷️ Жанры")
@@ -315,28 +372,3 @@ async def add_ch_6(message: Message):
 
     await admin_labeler.state_dispenser.delete(message.peer_id)
     await message.answer(f"✅ Глава {state.payload['ch_num']} успешно сохранена!", keyboard=admin_root_kb())
-
-# --- 📢 РАССЫЛКА ---
-@admin_labeler.message(text="📢 Рассылка")
-@admin_labeler.message(payload={"adm": "broadcast"})
-async def broadcast_1(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.BROADCAST)
-    await message.answer("Введите текст сообщения для рассылки всем читателям:")
-
-@admin_labeler.message(state=AdminState.BROADCAST)
-async def broadcast_2(message: Message):
-    text_to_send = message.text
-    await admin_labeler.state_dispenser.delete(message.peer_id)
-    await message.answer("⏳ Рассылка отправляется...")
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id FROM users") as cur:
-            users = await cur.fetchall()
-
-    for u in users:
-        try:
-            await api.messages.send(user_id=u[0], message=text_to_send, random_id=0)
-        except Exception:
-            pass
-    await message.answer("✅ Рассылка завершена!", keyboard=admin_root_kb())
