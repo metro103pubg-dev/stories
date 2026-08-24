@@ -1,7 +1,9 @@
 from vkbottle.bot import BotLabeler, Message
+from vkbottle import Keyboard, KeyboardButtonColor, Text
 from database import DB_PATH, get_or_create_user, update_bookmark, get_setting
 from keyboards import reading_kb, hybrid_paywall_kb, coin_shop_kb, main_menu_kb
 from config import GROUP_ID, VK_TOKEN
+from lava_pay import create_lava_payment
 from vkbottle import API
 import aiosqlite
 import time
@@ -10,9 +12,12 @@ import json
 reader_labeler = BotLabeler()
 api = API(token=VK_TOKEN)
 
-async def check_access(user_id: int, story_id: int, chapter_num: int, is_free: int) -> bool:
-    if is_free == 1:
+async def check_access(user_id: int, story_id: int, chapter_num: int, is_free: int, full_price: int) -> bool:
+    # 1. Если вся история бесплатная (Лид-магнит) или глава бесплатная
+    if full_price == 0 or is_free == 1:
         return True
+
+    # 2. Проверяем VK Donut (VIP)
     try:
         if await api.donut.is_don(owner_id=-GROUP_ID, user_id=user_id):
             return True
@@ -38,6 +43,7 @@ async def check_access(user_id: int, story_id: int, chapter_num: int, is_free: i
     return False
 
 # Магазин монет
+@reader_labeler.message(text="🪙 Купить монеты")
 @reader_labeler.message(payload={"cmd": "shop_coins"})
 async def shop_coins_handler(message: Message):
     await message.answer(
@@ -92,14 +98,30 @@ async def read_chapter_handler(message: Message):
         async with db.execute("SELECT title, full_price FROM stories WHERE id = ?", (story_id,)) as s_cur:
             story = await s_cur.fetchone()
 
+    # Если дочитали до конца истории (ФИНАЛ)
+    if not chapter and story:
+        story_title, full_price = story
+        end_kb = Keyboard(inline=True)
+        end_kb.add(Text("📚 Перейти в каталог историй", payload={"cmd": "catalog"}), color=KeyboardButtonColor.POSITIVE)
+        end_kb.row()
+        end_kb.add(Text("🪙 Купить монеты", payload={"cmd": "shop_coins"}), color=KeyboardButtonColor.PRIMARY)
+
+        await message.answer(
+            f"🎉 Поздравляем! Вы дочитали историю «{story_title}» до конца!\n\n"
+            f"Понравилось? В нашем каталоге вас ждут еще десятки захватывающих историй, хорроров и детективов! 📖\n\n"
+            f"Выбирайте следующую историю в каталоге 👇",
+            keyboard=end_kb
+        )
+        return
+
     if not chapter or not story:
-        await message.answer("🎉 Вы дочитали до конца вышедших глав!", keyboard=main_menu_kb())
+        await message.answer("История не найдена.", keyboard=main_menu_kb())
         return
 
     ch_title, content, photo, audio, price_coins, is_free = chapter
     story_title, full_price = story
 
-    if await check_access(user_id, story_id, chapter_num, is_free):
+    if await check_access(user_id, story_id, chapter_num, is_free, full_price):
         await update_bookmark(user_id, story_id, chapter_num)
         next_kb = reading_kb(story_id, chapter_num + 1)
         text = f"📖 {story_title} — Глава {chapter_num}: {ch_title}\n\n{content}"
@@ -113,6 +135,7 @@ async def read_chapter_handler(message: Message):
         else:
             await message.answer(text, keyboard=next_kb)
     else:
+        # Пейволл
         cost_coins = price_coins or 15
         await message.answer(
             f"🔒 Доступ к главе {chapter_num} закрыт.\n\n"
@@ -123,6 +146,7 @@ async def read_chapter_handler(message: Message):
         )
 
 # Закладка (Продолжить чтение)
+@reader_labeler.message(text="📖 Продолжить чтение")
 @reader_labeler.message(payload={"cmd": "continue"})
 async def continue_reading(message: Message):
     user = await get_or_create_user(message.from_id)
