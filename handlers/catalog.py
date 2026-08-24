@@ -2,7 +2,7 @@ from vkbottle.bot import BotLabeler, Message
 from vkbottle import Keyboard, KeyboardButtonColor, Text, BaseStateGroup
 import aiosqlite
 from database import DB_PATH, get_all_genres
-from keyboards import reading_kb, main_menu_kb
+from keyboards import main_menu_kb
 
 catalog_labeler = BotLabeler()
 
@@ -10,6 +10,7 @@ class SearchState(BaseStateGroup):
     QUERY = 0
 
 # Каталог (выбор жанра)
+@catalog_labeler.message(text="📚 Каталог историй")
 @catalog_labeler.message(payload={"cmd": "catalog"})
 async def catalog_genres(message: Message):
     genres = await get_all_genres()
@@ -26,16 +27,18 @@ async def view_genre_stories(message: Message):
     genre = json.loads(message.payload)["genre"]
 
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT id, title, description FROM stories WHERE genre = ?", (genre,)) as cur:
+        async with db.execute("SELECT id, title, full_price FROM stories WHERE genre = ?", (genre,)) as cur:
             stories = await cur.fetchall()
 
     if not stories:
-        await message.answer(f"В жанре «{genre}» пока нет историй. Скоро добавим!")
+        await message.answer(f"В жанре «{genre}» пока нет историй. Скоро добавим!", keyboard=main_menu_kb())
         return
 
     kb = Keyboard(inline=True)
-    for s_id, s_title, _ in stories:
-        kb.add(Text(f"📖 {s_title}", payload={"cmd": "story_card", "story_id": s_id}))
+    for s_id, s_title, s_price in stories:
+        # Если цена 0 — вешаем значок Лид-магнита
+        badge = "🎁 [БЕСПЛАТНО]" if s_price == 0 else f"📖 [{s_price} ₽]"
+        kb.add(Text(f"{badge} {s_title}", payload={"cmd": "story_card", "story_id": s_id}))
         kb.row()
 
     await message.answer(f"Список историй в жанре «{genre}»:", keyboard=kb)
@@ -47,20 +50,29 @@ async def story_card(message: Message):
     story_id = json.loads(message.payload)["story_id"]
 
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT title, description, full_price FROM stories WHERE id = ?", (story_id,)) as cur:
+        async with db.execute("SELECT title, description, full_price, genre FROM stories WHERE id = ?", (story_id,)) as cur:
             story = await cur.fetchone()
 
     if not story:
         await message.answer("История не найдена.")
         return
 
-    title, desc, full_price = story
+    title, desc, full_price, genre = story
+    price_label = "🎁 БЕСПЛАТНО (Лид-магнит)" if full_price == 0 else f"{full_price} ₽"
+
     kb = Keyboard(inline=True)
     kb.add(Text("Начать читать ➡️", payload={"cmd": "read", "story_id": story_id, "chapter": 1}), color=KeyboardButtonColor.POSITIVE)
 
-    await message.answer(f"📖 *{title}*\n\n{desc}\n\n💰 Полная цена: {full_price} ₽", keyboard=kb)
+    await message.answer(
+        f"📖 *{title}*\n"
+        f"🏷️ Жанр: {genre}\n"
+        f"💰 Стоимость: {price_label}\n\n"
+        f"{desc}",
+        keyboard=kb
+    )
 
 # Поиск по названию
+@catalog_labeler.message(text="🔍 Поиск")
 @catalog_labeler.message(payload={"cmd": "search"})
 async def search_start(message: Message):
     await catalog_labeler.state_dispenser.set(message.peer_id, SearchState.QUERY)
@@ -72,7 +84,7 @@ async def search_process(message: Message):
     await catalog_labeler.state_dispenser.delete(message.peer_id)
 
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT id, title FROM stories WHERE title LIKE ?", (f"%{query}%",)) as cur:
+        async with db.execute("SELECT id, title, full_price FROM stories WHERE title LIKE ?", (f"%{query}%",)) as cur:
             results = await cur.fetchall()
 
     if not results:
@@ -80,8 +92,9 @@ async def search_process(message: Message):
         return
 
     kb = Keyboard(inline=True)
-    for s_id, s_title in results:
-        kb.add(Text(f"📖 {s_title}", payload={"cmd": "story_card", "story_id": s_id}))
+    for s_id, s_title, s_price in results:
+        badge = "🎁" if s_price == 0 else "📖"
+        kb.add(Text(f"{badge} {s_title}", payload={"cmd": "story_card", "story_id": s_id}))
         kb.row()
 
     await message.answer(f"Найдено историй: {len(results)}", keyboard=kb)
