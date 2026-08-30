@@ -25,12 +25,14 @@ class AdminState(BaseStateGroup):
     STORY_DESC = "story_desc"
     STORY_PRICE = "story_price"
     CH_STORY_ID = "ch_story_id"
+    CH_BRANCH = "ch_branch"
     CH_NUM = "ch_num"
     CH_TITLE = "ch_title"
     CH_TEXT = "ch_text"
     CH_FREE = "ch_free"
     CH_IS_END = "ch_is_end"
     CH_END_TITLE = "ch_end_title"
+    CH_NEXT = "ch_next"
     BROADCAST = "broadcast"
     GEN_LINK = "gen_link"
     DEL_STORY = "del_story"
@@ -77,7 +79,7 @@ async def admin_panel(message: Message):
     await get_or_create_user(message.from_id)
     await message.answer("🛠 Панель управления ботом:", keyboard=admin_root_kb())
 
-# Универсальная отмена
+# Отмена
 @admin_labeler.message(text=["❌ Отмена", "Отмена", "отмена", "/cancel"])
 @admin_labeler.message(payload={"adm": "cancel"})
 async def admin_cancel_handler(message: Message):
@@ -90,7 +92,179 @@ async def admin_cancel_handler(message: Message):
 async def back_to_main_user_menu(message: Message):
     await message.answer("Вы вернулись в главное меню читателя 👇", keyboard=main_menu_kb())
 
-# ==================== 🔀 ДОБАВЛЕНИЕ РАЗВИЛКИ ====================
+# ==================== 📝 СОЗДАНИЕ ГЛАВ С ВЕТКАМИ ====================
+
+@admin_labeler.message(text="📝 Добавить главу")
+@admin_labeler.message(payload={"adm": "add_chapter"})
+async def add_ch_1(message: Message):
+    if message.from_id not in ADMIN_IDS: return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CH_STORY_ID)
+    await message.answer("Введите ID истории (цифру), к которой добавляем главу:", keyboard=cancel_kb())
+
+@admin_labeler.message(state=AdminState.CH_STORY_ID)
+async def add_ch_2(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
+    if not message.text.isdigit():
+        await message.answer("Введите число!", keyboard=cancel_kb())
+        return
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CH_BRANCH, story_id=int(message.text))
+    await message.answer(
+        "🌿 Введите название ветки сюжета:\n"
+        "(Например: Основная, 🚪 Подвал, 🏃 Побег или 👑 VIP-ветка):",
+        keyboard=cancel_kb()
+    )
+
+@admin_labeler.message(state=AdminState.CH_BRANCH)
+async def add_ch_3(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
+    state = await admin_labeler.state_dispenser.get(message.peer_id)
+    await admin_labeler.state_dispenser.set(
+        message.peer_id, AdminState.CH_NUM,
+        story_id=state.payload["story_id"], branch=message.text
+    )
+    await message.answer("Введите номер главы (например: 1, 2, 3):", keyboard=cancel_kb())
+
+@admin_labeler.message(state=AdminState.CH_NUM)
+async def add_ch_4(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
+    if not message.text.isdigit():
+        await message.answer("Введите число!", keyboard=cancel_kb())
+        return
+    state = await admin_labeler.state_dispenser.get(message.peer_id)
+    await admin_labeler.state_dispenser.set(
+        message.peer_id, AdminState.CH_TITLE,
+        story_id=state.payload["story_id"], branch=state.payload["branch"], ch_num=int(message.text)
+    )
+    await message.answer("Введите название главы:", keyboard=cancel_kb())
+
+@admin_labeler.message(state=AdminState.CH_TITLE)
+async def add_ch_5(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
+    state = await admin_labeler.state_dispenser.get(message.peer_id)
+    await admin_labeler.state_dispenser.set(
+        message.peer_id, AdminState.CH_TEXT,
+        story_id=state.payload["story_id"], branch=state.payload["branch"],
+        ch_num=state.payload["ch_num"], ch_title=message.text
+    )
+    await message.answer("Отправьте текст главы (можно прикрепить фото):", keyboard=cancel_kb())
+
+@admin_labeler.message(state=AdminState.CH_TEXT)
+async def add_ch_6(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
+    state = await admin_labeler.state_dispenser.get(message.peer_id)
+    photo_att = None
+    if message.attachments:
+        for a in message.attachments:
+            if a.photo:
+                photo_att = f"photo{a.photo.owner_id}_{a.photo.id}"
+                break
+
+    await admin_labeler.state_dispenser.set(
+        message.peer_id, AdminState.CH_FREE,
+        story_id=state.payload["story_id"], branch=state.payload["branch"],
+        ch_num=state.payload["ch_num"], ch_title=state.payload["ch_title"],
+        text=message.text, photo=photo_att
+    )
+    kb = Keyboard(inline=True)
+    kb.add(Text("Да (Бесплатная)", payload={"free": 1}))
+    kb.add(Text("Нет (Платная)", payload={"free": 0}))
+    await message.answer("Сделать главу бесплатной?", keyboard=kb)
+
+@admin_labeler.message(state=AdminState.CH_FREE)
+async def add_ch_7(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
+    import json
+    is_free = 1
+    if message.payload:
+        try: is_free = json.loads(message.payload).get("free", 1)
+        except Exception: pass
+    elif "Нет" in message.text:
+        is_free = 0
+
+    state = await admin_labeler.state_dispenser.get(message.peer_id)
+    await admin_labeler.state_dispenser.set(
+        message.peer_id, AdminState.CH_IS_END,
+        story_id=state.payload["story_id"], branch=state.payload["branch"],
+        ch_num=state.payload["ch_num"], ch_title=state.payload["ch_title"],
+        text=state.payload["text"], photo=state.payload["photo"], is_free=is_free
+    )
+    kb = Keyboard(inline=True)
+    kb.add(Text("Обычная глава", payload={"ending": 0}))
+    kb.add(Text("🏆 Это Финал ветки", payload={"ending": 1}))
+    await message.answer("Эта глава является финалом (концовкой ветки)?", keyboard=kb)
+
+@admin_labeler.message(state=AdminState.CH_IS_END)
+async def add_ch_8(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
+    import json
+    is_end = 0
+    if message.payload:
+        try: is_end = json.loads(message.payload).get("ending", 0)
+        except Exception: pass
+    elif "Финал" in message.text:
+        is_end = 1
+
+    state = await admin_labeler.state_dispenser.get(message.peer_id)
+
+    if is_end == 1:
+        await admin_labeler.state_dispenser.set(
+            message.peer_id, AdminState.CH_END_TITLE,
+            story_id=state.payload["story_id"], branch=state.payload["branch"],
+            ch_num=state.payload["ch_num"], ch_title=state.payload["ch_title"],
+            text=state.payload["text"], photo=state.payload["photo"], is_free=state.payload["is_free"], is_ending=1
+        )
+        await message.answer("Введите название этой концовки (например: Концовка 1 из 3: Побег):", keyboard=cancel_kb())
+    else:
+        # Спрашиваем, куда ведет следующая глава внутри ветки
+        await admin_labeler.state_dispenser.set(
+            message.peer_id, AdminState.CH_NEXT,
+            story_id=state.payload["story_id"], branch=state.payload["branch"],
+            ch_num=state.payload["ch_num"], ch_title=state.payload["ch_title"],
+            text=state.payload["text"], photo=state.payload["photo"], is_free=state.payload["is_free"], is_ending=0
+        )
+        await message.answer(
+            f"Куда ведет кнопка «Дальше»? (введите номер следующей главы, например: {state.payload['ch_num'] + 1} или 0, если будут развилки):",
+            keyboard=cancel_kb()
+        )
+
+@admin_labeler.message(state=AdminState.CH_NEXT)
+async def add_ch_next(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
+    if not message.text.isdigit():
+        await message.answer("Введите число!", keyboard=cancel_kb())
+        return
+
+    next_ch = int(message.text) if int(message.text) > 0 else None
+    state = await admin_labeler.state_dispenser.get(message.peer_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO chapters (story_id, chapter_num, branch, title, content, photo_attachment, is_free, is_ending, next_chapter) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            (state.payload["story_id"], state.payload["ch_num"], state.payload["branch"], state.payload["ch_title"], state.payload["text"], state.payload["photo"], state.payload["is_free"], next_ch)
+        )
+        await db.commit()
+
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer(f"✅ Глава {state.payload['ch_num']} ветки «{state.payload['branch']}» успешно сохранена!", keyboard=admin_root_kb())
+
+@admin_labeler.message(state=AdminState.CH_END_TITLE)
+async def add_ch_end_finish(message: Message):
+    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
+    state = await admin_labeler.state_dispenser.get(message.peer_id)
+    end_title = message.text
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO chapters (story_id, chapter_num, branch, title, content, photo_attachment, is_free, is_ending, ending_title) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+            (state.payload["story_id"], state.payload["ch_num"], state.payload["branch"], state.payload["ch_title"], state.payload["text"], state.payload["photo"], state.payload["is_free"], end_title)
+        )
+        await db.commit()
+
+    await admin_labeler.state_dispenser.delete(message.peer_id)
+    await message.answer(f"🏆 Финал ветки «{state.payload['branch']}» ({end_title}) успешно сохранен!", keyboard=admin_root_kb())
+
+# ==================== 🔀 ДОБАВЛЕНИЕ РАЗВИЛОК ====================
+
 @admin_labeler.message(text="🔀 Добавить развилку")
 @admin_labeler.message(payload={"adm": "add_choice"})
 async def choice_step1(message: Message):
@@ -307,7 +481,7 @@ async def act_give_ch_finish(message: Message):
 
     await message.answer(f"✅ Глава #{ch_num} истории #{s_id} успешно выдана читателю {uid}!", keyboard=admin_root_kb())
 
-# ==================== 📝 СОЗДАНИЕ ГЛАВ И ИСТОРИЙ ====================
+# ==================== ➕ СОЗДАНИЕ ИСТОРИИ ====================
 
 @admin_labeler.message(text="➕ Создать историю")
 @admin_labeler.message(payload={"adm": "add_story"})
@@ -362,134 +536,6 @@ async def add_story_5(message: Message):
 
     await admin_labeler.state_dispenser.delete(message.peer_id)
     await message.answer(f"✅ История [ID: {s_id}] «{state.payload['title']}» успешно создана!", keyboard=admin_root_kb())
-
-# Добавление главы
-@admin_labeler.message(text="📝 Добавить главу")
-@admin_labeler.message(payload={"adm": "add_chapter"})
-async def add_ch_1(message: Message):
-    if message.from_id not in ADMIN_IDS: return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CH_STORY_ID)
-    await message.answer("Введите ID истории (цифру), к которой добавляем главу:", keyboard=cancel_kb())
-
-@admin_labeler.message(state=AdminState.CH_STORY_ID)
-async def add_ch_2(message: Message):
-    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    if not message.text.isdigit():
-        await message.answer("Введите число!", keyboard=cancel_kb())
-        return
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CH_NUM, story_id=int(message.text))
-    await message.answer("Введите номер главы (например: 1, 2, 3):", keyboard=cancel_kb())
-
-@admin_labeler.message(state=AdminState.CH_NUM)
-async def add_ch_3(message: Message):
-    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    if not message.text.isdigit():
-        await message.answer("Введите число!", keyboard=cancel_kb())
-        return
-    state = await admin_labeler.state_dispenser.get(message.peer_id)
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CH_TITLE, story_id=state.payload["story_id"], ch_num=int(message.text))
-    await message.answer("Введите название главы:", keyboard=cancel_kb())
-
-@admin_labeler.message(state=AdminState.CH_TITLE)
-async def add_ch_4(message: Message):
-    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    state = await admin_labeler.state_dispenser.get(message.peer_id)
-    await admin_labeler.state_dispenser.set(
-        message.peer_id, AdminState.CH_TEXT,
-        story_id=state.payload["story_id"], ch_num=state.payload["ch_num"], ch_title=message.text
-    )
-    await message.answer("Отправьте текст главы (можно прикрепить фото):", keyboard=cancel_kb())
-
-@admin_labeler.message(state=AdminState.CH_TEXT)
-async def add_ch_5(message: Message):
-    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    state = await admin_labeler.state_dispenser.get(message.peer_id)
-    photo_att = None
-    if message.attachments:
-        for a in message.attachments:
-            if a.photo:
-                photo_att = f"photo{a.photo.owner_id}_{a.photo.id}"
-                break
-
-    await admin_labeler.state_dispenser.set(
-        message.peer_id, AdminState.CH_FREE,
-        story_id=state.payload["story_id"], ch_num=state.payload["ch_num"],
-        ch_title=state.payload["ch_title"], text=message.text, photo=photo_att
-    )
-    kb = Keyboard(inline=True)
-    kb.add(Text("Да (Бесплатная)", payload={"free": 1}))
-    kb.add(Text("Нет (Платная)", payload={"free": 0}))
-    await message.answer("Сделать главу бесплатной?", keyboard=kb)
-
-@admin_labeler.message(state=AdminState.CH_FREE)
-async def add_ch_6(message: Message):
-    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    import json
-    is_free = 1
-    if message.payload:
-        try: is_free = json.loads(message.payload).get("free", 1)
-        except Exception: pass
-    elif "Нет" in message.text:
-        is_free = 0
-
-    state = await admin_labeler.state_dispenser.get(message.peer_id)
-    await admin_labeler.state_dispenser.set(
-        message.peer_id, AdminState.CH_IS_END,
-        story_id=state.payload["story_id"], ch_num=state.payload["ch_num"],
-        ch_title=state.payload["ch_title"], text=state.payload["text"], photo=state.payload["photo"], is_free=is_free
-    )
-    kb = Keyboard(inline=True)
-    kb.add(Text("Обычная глава", payload={"ending": 0}))
-    kb.add(Text("🏆 Это Финал (Концовка)", payload={"ending": 1}))
-    await message.answer("Эта глава является финалом (концовкой ветки)?", keyboard=kb)
-
-@admin_labeler.message(state=AdminState.CH_IS_END)
-async def add_ch_7(message: Message):
-    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    import json
-    is_end = 0
-    if message.payload:
-        try: is_end = json.loads(message.payload).get("ending", 0)
-        except Exception: pass
-    elif "Финал" in message.text:
-        is_end = 1
-
-    state = await admin_labeler.state_dispenser.get(message.peer_id)
-
-    if is_end == 1:
-        await admin_labeler.state_dispenser.set(
-            message.peer_id, AdminState.CH_END_TITLE,
-            story_id=state.payload["story_id"], ch_num=state.payload["ch_num"],
-            ch_title=state.payload["ch_title"], text=state.payload["text"],
-            photo=state.payload["photo"], is_free=state.payload["is_free"], is_ending=1
-        )
-        await message.answer("Введите название этой концовки (например: Концовка 1 из 3: Побег):", keyboard=cancel_kb())
-    else:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT INTO chapters (story_id, chapter_num, title, content, photo_attachment, is_free, is_ending) VALUES (?, ?, ?, ?, ?, ?, 0)",
-                (state.payload["story_id"], state.payload["ch_num"], state.payload["ch_title"], state.payload["text"], state.payload["photo"], state.payload["is_free"])
-            )
-            await db.commit()
-
-        await admin_labeler.state_dispenser.delete(message.peer_id)
-        await message.answer(f"✅ Глава {state.payload['ch_num']} успешно сохранена!", keyboard=admin_root_kb())
-
-@admin_labeler.message(state=AdminState.CH_END_TITLE)
-async def add_ch_8(message: Message):
-    if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    state = await admin_labeler.state_dispenser.get(message.peer_id)
-    end_title = message.text
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO chapters (story_id, chapter_num, title, content, photo_attachment, is_free, is_ending, ending_title) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
-            (state.payload["story_id"], state.payload["ch_num"], state.payload["ch_title"], state.payload["text"], state.payload["photo"], state.payload["is_free"], end_title)
-        )
-        await db.commit()
-
-    await admin_labeler.state_dispenser.delete(message.peer_id)
-    await message.answer(f"🏆 Финальная глава {state.payload['ch_num']} с концовкой «{end_title}» успешно сохранена!", keyboard=admin_root_kb())
 
 # ==================== ОСТАЛЬНЫЕ КОМАНДЫ ====================
 
