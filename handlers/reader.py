@@ -29,7 +29,7 @@ async def check_access(user_id: int, story_id: int, chapter_num: str, is_free: i
             if u_row and u_row[0] > now:
                 return True
 
-        # Проверка покупок (покупки всей книги или конкретной главы 5а, 5б)
+        # Проверка покупок
         async with db.execute(
             "SELECT 1 FROM purchases WHERE user_id = ? AND story_id = ? AND (chapter_num = '0' OR chapter_num = ?)",
             (user_id, story_id, str(chapter_num))
@@ -183,13 +183,13 @@ async def read_chapter_handler(message: Message):
                 await message.answer(text, keyboard=kb)
             return
 
-        # 2. Проверяем развилки
+        # 2. Проверяем развилки для этой главы
         choices = await get_chapter_choices(story_id, chapter_num)
         if choices:
             text += "\n\n👉 Сделайте ваш выбор:"
             kb = choices_kb(story_id, choices)
         else:
-            # Определение следующей главы: если указана next_chapter (например 6а), берем её, иначе пробуем +1
+            # Если развилок нет — обычный переход
             if next_ch:
                 target_next = str(next_ch)
             elif chapter_num.isdigit():
