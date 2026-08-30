@@ -16,7 +16,7 @@ async def init_db():
                 vip_until INTEGER DEFAULT 0,
                 referrer_id INTEGER DEFAULT NULL,
                 last_story_id INTEGER DEFAULT NULL,
-                last_chapter_num INTEGER DEFAULT 1,
+                last_chapter_num TEXT DEFAULT '1',
                 created_at INTEGER
             )
         """)
@@ -36,7 +36,7 @@ async def init_db():
         ]
         await db.executemany("INSERT OR IGNORE INTO genres (name) VALUES (?)", default_genres)
 
-        # 3. Настройки экономики
+        # 3. Настройки
         await db.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -64,12 +64,12 @@ async def init_db():
             )
         """)
 
-        # 5. Главы с поддержкой веток сюжета (branch)
+        # 5. Главы с поддержкой буквенных номеров (например: 5а, 5б)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS chapters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 story_id INTEGER,
-                chapter_num INTEGER,
+                chapter_num TEXT,
                 branch TEXT DEFAULT 'Основная',
                 title TEXT,
                 content TEXT,
@@ -79,7 +79,7 @@ async def init_db():
                 is_free INTEGER DEFAULT 0,
                 is_ending INTEGER DEFAULT 0,
                 ending_title TEXT DEFAULT NULL,
-                next_chapter INTEGER DEFAULT NULL,
+                next_chapter TEXT DEFAULT NULL,
                 FOREIGN KEY (story_id) REFERENCES stories(id)
             )
         """)
@@ -89,8 +89,8 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS choices (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 story_id INTEGER,
-                from_chapter INTEGER,
-                to_chapter INTEGER,
+                from_chapter TEXT,
+                to_chapter TEXT,
                 choice_text TEXT,
                 is_vip_only INTEGER DEFAULT 0,
                 price_coins INTEGER DEFAULT 0
@@ -98,21 +98,8 @@ async def init_db():
         """)
 
         # 7. Покупки и таймеры
-        await db.execute("CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, story_id INTEGER, chapter_num INTEGER, PRIMARY KEY (user_id, story_id, chapter_num))")
-        await db.execute("CREATE TABLE IF NOT EXISTS chapter_timers (user_id INTEGER, story_id INTEGER, chapter_num INTEGER, unlock_at INTEGER, PRIMARY KEY (user_id, story_id, chapter_num))")
-
-        # --- Авто-миграция колонок для веток и концовок ---
-        try: await db.execute("ALTER TABLE chapters ADD COLUMN branch TEXT DEFAULT 'Основная'")
-        except Exception: pass
-
-        try: await db.execute("ALTER TABLE chapters ADD COLUMN next_chapter INTEGER DEFAULT NULL")
-        except Exception: pass
-
-        try: await db.execute("ALTER TABLE chapters ADD COLUMN is_ending INTEGER DEFAULT 0")
-        except Exception: pass
-
-        try: await db.execute("ALTER TABLE chapters ADD COLUMN ending_title TEXT DEFAULT NULL")
-        except Exception: pass
+        await db.execute("CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, story_id INTEGER, chapter_num TEXT, PRIMARY KEY (user_id, story_id, chapter_num))")
+        await db.execute("CREATE TABLE IF NOT EXISTS chapter_timers (user_id INTEGER, story_id INTEGER, chapter_num TEXT, unlock_at INTEGER, PRIMARY KEY (user_id, story_id, chapter_num))")
 
         await db.commit()
 
@@ -129,25 +116,25 @@ async def get_or_create_user(user_id: int, referrer_id: int = None):
                     (user_id, referrer_id, now)
                 )
                 await db.commit()
-                return {"user_id": user_id, "coins": 0, "vip_until": 0, "referrer_id": referrer_id, "last_story_id": None, "last_chapter_num": 1}
+                return {"user_id": user_id, "coins": 0, "vip_until": 0, "referrer_id": referrer_id, "last_story_id": None, "last_chapter_num": "1"}
             return {
                 "user_id": user[0], "coins": user[1], "vip_until": user[2],
-                "referrer_id": user[3], "last_story_id": user[4], "last_chapter_num": user[5]
+                "referrer_id": user[3], "last_story_id": user[4], "last_chapter_num": str(user[5] or "1")
             }
 
-async def update_bookmark(user_id: int, story_id: int, chapter_num: int):
+async def update_bookmark(user_id: int, story_id: int, chapter_num: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE users SET last_story_id = ?, last_chapter_num = ? WHERE user_id = ?",
-            (story_id, chapter_num, user_id)
+            (story_id, str(chapter_num), user_id)
         )
         await db.commit()
 
-async def get_chapter_choices(story_id: int, chapter_num: int):
+async def get_chapter_choices(story_id: int, chapter_num: str):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT id, to_chapter, choice_text, is_vip_only, price_coins FROM choices WHERE story_id = ? AND from_chapter = ?",
-            (story_id, chapter_num)
+            (story_id, str(chapter_num))
         ) as cur:
             return await cur.fetchall()
 
@@ -166,12 +153,12 @@ async def admin_give_vip(user_id: int, days: int = 30):
 
 async def admin_give_story(user_id: int, story_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT OR IGNORE INTO purchases (user_id, story_id, chapter_num) VALUES (?, ?, 0)", (user_id, story_id))
+        await db.execute("INSERT OR IGNORE INTO purchases (user_id, story_id, chapter_num) VALUES (?, ?, '0')", (user_id, story_id))
         await db.commit()
 
-async def admin_give_chapter(user_id: int, story_id: int, chapter_num: int):
+async def admin_give_chapter(user_id: int, story_id: int, chapter_num: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT OR IGNORE INTO purchases (user_id, story_id, chapter_num) VALUES (?, ?, ?)", (user_id, story_id, chapter_num))
+        await db.execute("INSERT OR IGNORE INTO purchases (user_id, story_id, chapter_num) VALUES (?, ?, ?)", (user_id, story_id, str(chapter_num)))
         await db.commit()
 
 async def get_setting(key: str, default: str = "") -> str:
