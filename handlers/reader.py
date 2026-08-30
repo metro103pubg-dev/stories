@@ -23,7 +23,7 @@ async def check_access(user_id: int, story_id: int, chapter_num: int, is_free: i
 
     now = int(time.time())
     async with aiosqlite.connect(DB_PATH) as db:
-        # Проверка VIP из БД (ручная выдача)
+        # Проверка VIP из БД
         async with db.execute("SELECT vip_until FROM users WHERE user_id = ?", (user_id,)) as u_cur:
             u_row = await u_cur.fetchone()
             if u_row and u_row[0] > now:
@@ -69,11 +69,11 @@ async def shop_coins_handler(message: Message):
         f"👑 VIP-статус: {vip_status}\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"👑 VIP-ПОДПИСКА (VK Donut):\n"
-        f"• Безлимитный доступ ко ВСЕМ историям и развилкам\n"
+        f"• Безлимитный доступ ко ВСЕМ историям и веткам\n"
         f"• Без таймеров и списания монет\n"
         f"• Стоимость: 199 ₽ / месяц\n\n"
         f"🪙 ПАКЕТЫ МОНЕТ (Оплата по СБП):\n"
-        f"• Для поглавной покупки и премиум-выборов\n\n"
+        f"• Для поглавной покупки и сюжетных выборов\n\n"
         f"👇 Выбирай подходящий вариант:"
     )
     await message.answer(text, keyboard=coin_shop_kb())
@@ -107,7 +107,7 @@ async def choose_branch_handler(message: Message):
             if not is_don:
                 await message.answer(
                     "👑 Этот выбор доступен только для VIP-читателей (VK Donut)!\n\n"
-                    "Оформите подписку, чтобы открыть секретную сюжетную линию 👇",
+                    "Оформите подписку, чтобы открыть секретную ветку сюжета 👇",
                     keyboard=coin_shop_kb()
                 )
                 return
@@ -121,7 +121,7 @@ async def choose_branch_handler(message: Message):
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("UPDATE users SET coins = coins - ? WHERE user_id = ?", (price, user_id))
                     await db.commit()
-                await message.answer(f"🪙 Списано {price} монет за премиум-выбор!")
+                await message.answer(f"🪙 Списано {price} монет за сюжетный выбор!")
 
     message.payload = json.dumps({"cmd": "read", "story_id": story_id, "chapter": to_chapter})
     await read_chapter_handler(message)
@@ -147,7 +147,7 @@ async def read_chapter_handler(message: Message):
 
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT title, content, photo_attachment, audio_attachment, price_coins, is_free, is_ending, ending_title FROM chapters WHERE story_id = ? AND chapter_num = ?",
+            "SELECT title, content, photo_attachment, audio_attachment, price_coins, is_free, is_ending, ending_title, branch, next_chapter FROM chapters WHERE story_id = ? AND chapter_num = ?",
             (story_id, chapter_num)
         ) as cur:
             chapter = await cur.fetchone()
@@ -159,12 +159,15 @@ async def read_chapter_handler(message: Message):
         await message.answer("🎉 Вы дочитали до конца вышедших глав!", keyboard=main_menu_kb())
         return
 
-    ch_title, content, photo, audio, price_coins, is_free, is_ending, ending_title = chapter
+    ch_title, content, photo, audio, price_coins, is_free, is_ending, ending_title, branch, next_ch = chapter
     story_title, full_price = story
 
     if await check_access(user_id, story_id, chapter_num, is_free, full_price):
         await update_bookmark(user_id, story_id, chapter_num)
-        text = f"📖 {story_title} — Глава {chapter_num}: {ch_title}\n\n{content}"
+
+        # Красивая шапка с названием ветки сюжета
+        branch_info = f"🌿 Ветка: {branch}\n" if branch and branch != "Основная" else ""
+        text = f"📖 [ID: {story_id}] {story_title}\n{branch_info}📄 Глава {chapter_num}: {ch_title}\n\n{content}"
 
         attachments = []
         if photo: attachments.append(photo)
@@ -173,7 +176,7 @@ async def read_chapter_handler(message: Message):
         # 1. Если это ФИНАЛ (Концовка)
         if is_ending == 1:
             end_name = ending_title or "Завершение истории"
-            text += f"\n\n━━━━━━━━━━━━━━━━━━\n🏆 ФИНАЛ: {end_name}"
+            text += f"\n\n━━━━━━━━━━━━━━━━━━\n🏆 ФИНАЛ ВЕТКИ: {end_name}"
             kb = ending_kb(story_id)
             if attachments:
                 await message.answer(text, attachment=",".join(attachments), keyboard=kb)
@@ -187,7 +190,9 @@ async def read_chapter_handler(message: Message):
             text += "\n\n👉 Сделайте ваш выбор:"
             kb = choices_kb(story_id, choices)
         else:
-            kb = reading_kb(story_id, chapter_num + 1)
+            # Если развилок нет — идем на следующую главу внутри ветки
+            target_next = next_ch if next_ch else (chapter_num + 1)
+            kb = reading_kb(story_id, target_next)
 
         if attachments:
             await message.answer(text, attachment=",".join(attachments), keyboard=kb)
@@ -204,7 +209,7 @@ async def read_chapter_handler(message: Message):
             keyboard=hybrid_paywall_kb(user['coins'], story_id, chapter_num, cost_coins, full_price)
         )
 
-# Покупка главы за монеты
+# Покупка за монеты
 @reader_labeler.message(payload_map={"cmd": "unlock_coin", "story_id": int, "chapter": int})
 async def unlock_with_coins(message: Message):
     payload = json.loads(message.payload)
