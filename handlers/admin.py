@@ -92,7 +92,7 @@ async def admin_cancel_handler(message: Message):
 async def back_to_main_user_menu(message: Message):
     await message.answer("Вы вернулись в главное меню читателя 👇", keyboard=main_menu_kb())
 
-# ==================== 📝 СОЗДАНИЕ ГЛАВ С ВЕТКАМИ ====================
+# ==================== 📝 СОЗДАНИЕ ГЛАВ ====================
 
 @admin_labeler.message(text="📝 Добавить главу")
 @admin_labeler.message(payload={"adm": "add_chapter"})
@@ -122,20 +122,18 @@ async def add_ch_3(message: Message):
         message.peer_id, AdminState.CH_NUM,
         story_id=state.payload["story_id"], branch=message.text
     )
-    await message.answer("Введите номер главы (например: 1, 2, 3):", keyboard=cancel_kb())
+    await message.answer("Введите номер главы (например: 1, 2, 5а, 5б):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CH_NUM)
 async def add_ch_4(message: Message):
     if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    if not message.text.isdigit():
-        await message.answer("Введите число!", keyboard=cancel_kb())
-        return
+    ch_number = message.text.strip()
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     await admin_labeler.state_dispenser.set(
         message.peer_id, AdminState.CH_TITLE,
-        story_id=state.payload["story_id"], branch=state.payload["branch"], ch_num=int(message.text)
+        story_id=state.payload["story_id"], branch=state.payload["branch"], ch_num=ch_number
     )
-    await message.answer("Введите название главы:", keyboard=cancel_kb())
+    await message.answer(f"Введите название главы {ch_number}:", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CH_TITLE)
 async def add_ch_5(message: Message):
@@ -215,7 +213,6 @@ async def add_ch_8(message: Message):
         )
         await message.answer("Введите название этой концовки (например: Концовка 1 из 3: Побег):", keyboard=cancel_kb())
     else:
-        # Спрашиваем, куда ведет следующая глава внутри ветки
         await admin_labeler.state_dispenser.set(
             message.peer_id, AdminState.CH_NEXT,
             story_id=state.payload["story_id"], branch=state.payload["branch"],
@@ -223,24 +220,21 @@ async def add_ch_8(message: Message):
             text=state.payload["text"], photo=state.payload["photo"], is_free=state.payload["is_free"], is_ending=0
         )
         await message.answer(
-            f"Куда ведет кнопка «Дальше»? (введите номер следующей главы, например: {state.payload['ch_num'] + 1} или 0, если будут развилки):",
+            f"Куда ведет кнопка «Дальше»? (введите номер следующей главы, например: 6а или 0 если будут развилки):",
             keyboard=cancel_kb()
         )
 
 @admin_labeler.message(state=AdminState.CH_NEXT)
 async def add_ch_next(message: Message):
     if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    if not message.text.isdigit():
-        await message.answer("Введите число!", keyboard=cancel_kb())
-        return
-
-    next_ch = int(message.text) if int(message.text) > 0 else None
+    next_val = message.text.strip()
+    next_ch = None if next_val in ["0", "-", "нет", "выбор"] else next_val
     state = await admin_labeler.state_dispenser.get(message.peer_id)
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO chapters (story_id, chapter_num, branch, title, content, photo_attachment, is_free, is_ending, next_chapter) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
-            (state.payload["story_id"], state.payload["ch_num"], state.payload["branch"], state.payload["ch_title"], state.payload["text"], state.payload["photo"], state.payload["is_free"], next_ch)
+            (state.payload["story_id"], str(state.payload["ch_num"]), state.payload["branch"], state.payload["ch_title"], state.payload["text"], state.payload["photo"], state.payload["is_free"], next_ch)
         )
         await db.commit()
 
@@ -256,7 +250,7 @@ async def add_ch_end_finish(message: Message):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO chapters (story_id, chapter_num, branch, title, content, photo_attachment, is_free, is_ending, ending_title) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
-            (state.payload["story_id"], state.payload["ch_num"], state.payload["branch"], state.payload["ch_title"], state.payload["text"], state.payload["photo"], state.payload["is_free"], end_title)
+            (state.payload["story_id"], str(state.payload["ch_num"]), state.payload["branch"], state.payload["ch_title"], state.payload["text"], state.payload["photo"], state.payload["is_free"], end_title)
         )
         await db.commit()
 
@@ -279,28 +273,24 @@ async def choice_step2(message: Message):
         await message.answer("Введите число!", keyboard=cancel_kb())
         return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CHOICE_FROM, s_id=int(message.text))
-    await message.answer("В какой главе показывать кнопку выбора? (номер главы, например: 2):", keyboard=cancel_kb())
+    await message.answer("В какой главе показывать кнопку выбора? (например: 4 или 5а):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CHOICE_FROM)
 async def choice_step3(message: Message):
     if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    if not message.text.isdigit():
-        await message.answer("Введите число!", keyboard=cancel_kb())
-        return
+    from_ch = message.text.strip()
     state = await admin_labeler.state_dispenser.get(message.peer_id)
-    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CHOICE_TO, s_id=state.payload["s_id"], from_ch=int(message.text))
-    await message.answer("На какую главу должен перевести этот выбор? (номер целевой главы, например: 3):", keyboard=cancel_kb())
+    await admin_labeler.state_dispenser.set(message.peer_id, AdminState.CHOICE_TO, s_id=state.payload["s_id"], from_ch=from_ch)
+    await message.answer("На какую главу должен перевести этот выбор? (например: 5а или 5б):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.CHOICE_TO)
 async def choice_step4(message: Message):
     if message.text == "❌ Отмена": return await admin_cancel_handler(message)
-    if not message.text.isdigit():
-        await message.answer("Введите число!", keyboard=cancel_kb())
-        return
+    to_ch = message.text.strip()
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     await admin_labeler.state_dispenser.set(
         message.peer_id, AdminState.CHOICE_TEXT,
-        s_id=state.payload["s_id"], from_ch=state.payload["from_ch"], to_ch=int(message.text)
+        s_id=state.payload["s_id"], from_ch=state.payload["from_ch"], to_ch=to_ch
     )
     await message.answer("Введите текст кнопки выбора (например: 🚪 Открыть дверь подвала):", keyboard=cancel_kb())
 
@@ -333,7 +323,7 @@ async def choice_step6(message: Message):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO choices (story_id, from_chapter, to_chapter, choice_text, is_vip_only) VALUES (?, ?, ?, ?, ?)",
-            (state.payload["s_id"], state.payload["from_ch"], state.payload["to_ch"], state.payload["c_text"], is_vip)
+            (state.payload["s_id"], str(state.payload["from_ch"]), str(state.payload["to_ch"]), state.payload["c_text"], is_vip)
         )
         await db.commit()
 
@@ -365,9 +355,9 @@ async def user_mgr_card(message: Message):
         vip_str = f"Активен (осталось {days_left} дн.) 👑"
 
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM purchases WHERE user_id = ? AND chapter_num = 0", (target_id,)) as c1:
+        async with db.execute("SELECT COUNT(*) FROM purchases WHERE user_id = ? AND chapter_num = '0'", (target_id,)) as c1:
             stories_bought = (await c1.fetchone())[0]
-        async with db.execute("SELECT COUNT(*) FROM purchases WHERE user_id = ? AND chapter_num > 0", (target_id,)) as c2:
+        async with db.execute("SELECT COUNT(*) FROM purchases WHERE user_id = ? AND chapter_num != '0'", (target_id,)) as c2:
             chapters_bought = (await c2.fetchone())[0]
 
     text = (
@@ -458,17 +448,17 @@ async def act_give_ch(message: Message):
     import json
     uid = json.loads(message.payload)["uid"]
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.USER_GIVE_CH, target_uid=uid)
-    await message.answer(f"Введите через пробел: ID истории и номер главы для выдачи (например: 1 3):", keyboard=cancel_kb())
+    await message.answer(f"Введите через пробел: ID истории и номер главы (например: 1 5а):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.USER_GIVE_CH)
 async def act_give_ch_finish(message: Message):
     if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     parts = message.text.strip().split()
-    if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
-        await message.answer("Введите два числа через пробел (например: 1 3):", keyboard=cancel_kb())
+    if len(parts) < 2 or not parts[0].isdigit():
+        await message.answer("Введите ID истории и номер главы через пробел (например: 1 5а):", keyboard=cancel_kb())
         return
     s_id = int(parts[0])
-    ch_num = int(parts[1])
+    ch_num = str(parts[1])
     state = await admin_labeler.state_dispenser.get(message.peer_id)
     uid = state.payload["target_uid"]
 
@@ -572,15 +562,15 @@ async def del_story_2(message: Message):
 async def del_ch_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.DEL_CHAPTER)
-    await message.answer("Введите через пробел ID истории и номер главы для удаления (например: 1 2):", keyboard=cancel_kb())
+    await message.answer("Введите через пробел ID истории и номер главы для удаления (например: 1 5а):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.DEL_CHAPTER)
 async def del_ch_2(message: Message):
     if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     parts = message.text.strip().split()
-    if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit(): return
+    if len(parts) < 2 or not parts[0].isdigit(): return
     s_id = int(parts[0])
-    ch_num = int(parts[1])
+    ch_num = str(parts[1])
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM chapters WHERE story_id = ? AND chapter_num = ?", (s_id, ch_num))
         await db.execute("DELETE FROM choices WHERE story_id = ? AND from_chapter = ?", (s_id, ch_num))
@@ -593,13 +583,13 @@ async def del_ch_2(message: Message):
 async def gen_link_1(message: Message):
     if message.from_id not in ADMIN_IDS: return
     await admin_labeler.state_dispenser.set(message.peer_id, AdminState.GEN_LINK)
-    await message.answer("Введите через пробел ID истории и номер главы (например: 1 2):", keyboard=cancel_kb())
+    await message.answer("Введите через пробел ID истории и номер главы (например: 1 2 или 1 5а):", keyboard=cancel_kb())
 
 @admin_labeler.message(state=AdminState.GEN_LINK)
 async def gen_link_2(message: Message):
     if message.text == "❌ Отмена": return await admin_cancel_handler(message)
     parts = message.text.strip().split()
-    if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit(): return
+    if len(parts) < 2 or not parts[0].isdigit(): return
     s_id, ch_num = parts[0], parts[1]
     await admin_labeler.state_dispenser.delete(message.peer_id)
     link = f"https://vk.me/club{GROUP_ID}?ref=story_{s_id}_{ch_num}"
