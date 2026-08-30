@@ -36,7 +36,7 @@ async def init_db():
         ]
         await db.executemany("INSERT OR IGNORE INTO genres (name) VALUES (?)", default_genres)
 
-        # 3. Настройки
+        # 3. Настройки экономики
         await db.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -64,12 +64,13 @@ async def init_db():
             )
         """)
 
-        # 5. Главы
+        # 5. Главы с поддержкой веток сюжета (branch)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS chapters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 story_id INTEGER,
                 chapter_num INTEGER,
+                branch TEXT DEFAULT 'Основная',
                 title TEXT,
                 content TEXT,
                 photo_attachment TEXT DEFAULT NULL,
@@ -78,6 +79,7 @@ async def init_db():
                 is_free INTEGER DEFAULT 0,
                 is_ending INTEGER DEFAULT 0,
                 ending_title TEXT DEFAULT NULL,
+                next_chapter INTEGER DEFAULT NULL,
                 FOREIGN KEY (story_id) REFERENCES stories(id)
             )
         """)
@@ -99,20 +101,22 @@ async def init_db():
         await db.execute("CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, story_id INTEGER, chapter_num INTEGER, PRIMARY KEY (user_id, story_id, chapter_num))")
         await db.execute("CREATE TABLE IF NOT EXISTS chapter_timers (user_id INTEGER, story_id INTEGER, chapter_num INTEGER, unlock_at INTEGER, PRIMARY KEY (user_id, story_id, chapter_num))")
 
-        # Автоматическая миграция (добавление новых колонок в старую базу)
-        try:
-            await db.execute("ALTER TABLE chapters ADD COLUMN is_ending INTEGER DEFAULT 0")
-        except Exception:
-            pass
+        # --- Авто-миграция колонок для веток и концовок ---
+        try: await db.execute("ALTER TABLE chapters ADD COLUMN branch TEXT DEFAULT 'Основная'")
+        except Exception: pass
 
-        try:
-            await db.execute("ALTER TABLE chapters ADD COLUMN ending_title TEXT DEFAULT NULL")
-        except Exception:
-            pass
+        try: await db.execute("ALTER TABLE chapters ADD COLUMN next_chapter INTEGER DEFAULT NULL")
+        except Exception: pass
+
+        try: await db.execute("ALTER TABLE chapters ADD COLUMN is_ending INTEGER DEFAULT 0")
+        except Exception: pass
+
+        try: await db.execute("ALTER TABLE chapters ADD COLUMN ending_title TEXT DEFAULT NULL")
+        except Exception: pass
 
         await db.commit()
 
-# --- Вспомогательные функции ---
+# --- Хелперы ---
 
 async def get_or_create_user(user_id: int, referrer_id: int = None):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -147,7 +151,7 @@ async def get_chapter_choices(story_id: int, chapter_num: int):
         ) as cur:
             return await cur.fetchall()
 
-# Админ-функции выдачи читателям
+# Админ-функции
 async def admin_give_coins(user_id: int, amount: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET coins = coins + ? WHERE user_id = ?", (amount, user_id))
