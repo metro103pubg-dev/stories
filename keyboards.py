@@ -19,7 +19,7 @@ def main_menu_kb():
     return kb
 
 def reading_kb(story_id: int, next_chapter: str):
-    """Переход на следующую главу (поддерживает 5а, 5б и т.д.)"""
+    """Обычный переход на следующую главу"""
     kb = Keyboard(inline=True)
     kb.add(
         Text("Читать дальше ➡️", payload={"cmd": "read", "story_id": story_id, "chapter": str(next_chapter)}),
@@ -28,21 +28,22 @@ def reading_kb(story_id: int, next_chapter: str):
     return kb
 
 def choices_kb(story_id: int, choices_list: list):
-    """Клавиатура развилок"""
+    """Клавиатура развилок (без пустых рядов в конце)"""
     kb = Keyboard(inline=True)
-    for c_id, to_ch, c_text, is_vip, price in choices_list:
+    for i, (c_id, to_ch, c_text, is_vip, price) in enumerate(choices_list):
+        if i > 0:
+            kb.row()  # перенос строки только МЕЖДУ кнопками, но не в конце!
+
         label = c_text
+        color = KeyboardButtonColor.SECONDARY
         if is_vip:
             label = f"👑 [VIP] {c_text}"
             color = KeyboardButtonColor.POSITIVE
         elif price > 0:
             label = f"🪙 [{price} монет] {c_text}"
             color = KeyboardButtonColor.PRIMARY
-        else:
-            color = KeyboardButtonColor.SECONDARY
 
-        kb.add(Text(label, payload={"cmd": "choose", "story_id": story_id, "to_ch": str(to_ch), "choice_id": c_id}))
-        kb.row()
+        kb.add(Text(label, payload={"cmd": "choose", "story_id": story_id, "to_ch": str(to_ch), "choice_id": c_id}), color=color)
     return kb
 
 def ending_kb(story_id: int):
@@ -63,18 +64,15 @@ def hybrid_paywall_kb(user_coins: int, story_id: int, chapter_num: str, chapter_
             Text(f"🪙 Открыть главу ({chapter_coins} монет)", payload={"cmd": "unlock_coin", "story_id": story_id, "chapter": str(chapter_num)}),
             color=KeyboardButtonColor.POSITIVE
         )
-        kb.row()
     else:
         kb.add(Text("🪙 Пополнить монеты (от 50 ₽)", payload={"cmd": "shop_coins"}), color=KeyboardButtonColor.PRIMARY)
-        kb.row()
 
+    kb.row()
     donut_url = f"https://vk.com/donut/club{GROUP_ID}"
     kb.add(OpenLink(donut_url, label="👑 VIP на всё (VK Donut)"))
     kb.row()
-
     kb.add(OpenLink(LAVA_LINK_BOOK, label=f"📖 Купить всю книгу ({full_price} ₽)"))
     kb.row()
-
     kb.add(
         Text("⏳ Подождать 3 часа (бесплатно)", payload={"cmd": "start_timer", "story_id": story_id, "chapter": str(chapter_num)}),
         color=KeyboardButtonColor.SECONDARY
