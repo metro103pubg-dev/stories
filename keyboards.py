@@ -18,17 +18,17 @@ def main_menu_kb():
     kb.add(Text("👤 Профиль", payload={"cmd": "profile"}))
     return kb
 
-def reading_kb(story_id: int, next_chapter: int):
-    """Обычный переход, если в главе нет развилок"""
+def reading_kb(story_id: int, next_chapter: str):
+    """Переход на следующую главу (поддерживает 5а, 5б и т.д.)"""
     kb = Keyboard(inline=True)
     kb.add(
-        Text("Читать дальше ➡️", payload={"cmd": "read", "story_id": story_id, "chapter": next_chapter}),
+        Text("Читать дальше ➡️", payload={"cmd": "read", "story_id": story_id, "chapter": str(next_chapter)}),
         color=KeyboardButtonColor.PRIMARY
     )
     return kb
 
 def choices_kb(story_id: int, choices_list: list):
-    """Кнопки интерактивных развилок"""
+    """Клавиатура развилок"""
     kb = Keyboard(inline=True)
     for c_id, to_ch, c_text, is_vip, price in choices_list:
         label = c_text
@@ -41,12 +41,12 @@ def choices_kb(story_id: int, choices_list: list):
         else:
             color = KeyboardButtonColor.SECONDARY
 
-        kb.add(Text(label, payload={"cmd": "choose", "story_id": story_id, "to_ch": to_ch, "choice_id": c_id}))
+        kb.add(Text(label, payload={"cmd": "choose", "story_id": story_id, "to_ch": str(to_ch), "choice_id": c_id}))
         kb.row()
     return kb
 
 def ending_kb(story_id: int):
-    """Меню после достижения финала ветки"""
+    """Меню финала ветки"""
     kb = Keyboard(inline=True)
     kb.add(Text("🔄 Пройти заново (другие выборы)", payload={"cmd": "restart_story", "story_id": story_id}), color=KeyboardButtonColor.POSITIVE)
     kb.row()
@@ -55,12 +55,12 @@ def ending_kb(story_id: int):
     kb.add(Text("🪙 Купить монеты / VIP", payload={"cmd": "shop_coins"}))
     return kb
 
-def hybrid_paywall_kb(user_coins: int, story_id: int, chapter_num: int, chapter_coins: int, full_price: int):
+def hybrid_paywall_kb(user_coins: int, story_id: int, chapter_num: str, chapter_coins: int, full_price: int):
     kb = Keyboard(inline=True)
     
     if user_coins >= chapter_coins:
         kb.add(
-            Text(f"🪙 Открыть главу ({chapter_coins} монет)", payload={"cmd": "unlock_coin", "story_id": story_id, "chapter": chapter_num}),
+            Text(f"🪙 Открыть главу ({chapter_coins} монет)", payload={"cmd": "unlock_coin", "story_id": story_id, "chapter": str(chapter_num)}),
             color=KeyboardButtonColor.POSITIVE
         )
         kb.row()
@@ -76,13 +76,12 @@ def hybrid_paywall_kb(user_coins: int, story_id: int, chapter_num: int, chapter_
     kb.row()
 
     kb.add(
-        Text("⏳ Подождать 3 часа (бесплатно)", payload={"cmd": "start_timer", "story_id": story_id, "chapter": chapter_num}),
+        Text("⏳ Подождать 3 часа (бесплатно)", payload={"cmd": "start_timer", "story_id": story_id, "chapter": str(chapter_num)}),
         color=KeyboardButtonColor.SECONDARY
     )
     return kb
 
 def coin_shop_kb():
-    """Витрина: VK Donut + Пакеты монет по СБП"""
     kb = Keyboard(inline=True)
     donut_url = f"https://vk.com/donut/club{GROUP_ID}"
     kb.add(OpenLink(donut_url, label="👑 VIP-Подписка на всё (199 ₽/мес)"))
