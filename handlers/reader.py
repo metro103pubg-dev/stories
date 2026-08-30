@@ -10,7 +10,7 @@ import json
 reader_labeler = BotLabeler()
 api = API(token=VK_TOKEN)
 
-async def check_access(user_id: int, story_id: int, chapter_num: int, is_free: int, full_price: int) -> bool:
+async def check_access(user_id: int, story_id: int, chapter_num: str, is_free: int, full_price: int) -> bool:
     if full_price == 0 or is_free == 1:
         return True
 
@@ -29,10 +29,10 @@ async def check_access(user_id: int, story_id: int, chapter_num: int, is_free: i
             if u_row and u_row[0] > now:
                 return True
 
-        # Проверка покупок
+        # Проверка покупок (покупки всей книги или конкретной главы 5а, 5б)
         async with db.execute(
-            "SELECT 1 FROM purchases WHERE user_id = ? AND story_id = ? AND (chapter_num = 0 OR chapter_num = ?)",
-            (user_id, story_id, chapter_num)
+            "SELECT 1 FROM purchases WHERE user_id = ? AND story_id = ? AND (chapter_num = '0' OR chapter_num = ?)",
+            (user_id, story_id, str(chapter_num))
         ) as p_cur:
             if await p_cur.fetchone():
                 return True
@@ -40,7 +40,7 @@ async def check_access(user_id: int, story_id: int, chapter_num: int, is_free: i
         # Проверка таймера
         async with db.execute(
             "SELECT unlock_at FROM chapter_timers WHERE user_id = ? AND story_id = ? AND chapter_num = ?",
-            (user_id, story_id, chapter_num)
+            (user_id, story_id, str(chapter_num))
         ) as t_cur:
             timer = await t_cur.fetchone()
             if timer and timer[0] <= now:
@@ -69,7 +69,7 @@ async def shop_coins_handler(message: Message):
         f"👑 VIP-статус: {vip_status}\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"👑 VIP-ПОДПИСКА (VK Donut):\n"
-        f"• Безлимитный доступ ко ВСЕМ историям и веткам\n"
+        f"• Безлимитный доступ ко ВСЕМ историям и развилкам\n"
         f"• Без таймеров и списания монет\n"
         f"• Стоимость: 199 ₽ / месяц\n\n"
         f"🪙 ПАКЕТЫ МОНЕТ (Оплата по СБП):\n"
@@ -79,11 +79,11 @@ async def shop_coins_handler(message: Message):
     await message.answer(text, keyboard=coin_shop_kb())
 
 # Переход по интерактивному выбору
-@reader_labeler.message(payload_map={"cmd": "choose", "story_id": int, "to_ch": int, "choice_id": int})
+@reader_labeler.message(payload_map={"cmd": "choose", "story_id": int})
 async def choose_branch_handler(message: Message):
     payload = json.loads(message.payload)
     story_id = payload["story_id"]
-    to_chapter = payload["to_ch"]
+    to_chapter = str(payload["to_ch"])
     choice_id = payload["choice_id"]
     user_id = message.from_id
 
@@ -131,16 +131,16 @@ async def choose_branch_handler(message: Message):
 async def restart_story_handler(message: Message):
     payload = json.loads(message.payload)
     story_id = payload["story_id"]
-    await update_bookmark(message.from_id, story_id, 1)
-    message.payload = json.dumps({"cmd": "read", "story_id": story_id, "chapter": 1})
+    await update_bookmark(message.from_id, story_id, "1")
+    message.payload = json.dumps({"cmd": "read", "story_id": story_id, "chapter": "1"})
     await read_chapter_handler(message)
 
 # Чтение главы
-@reader_labeler.message(payload_map={"cmd": "read", "story_id": int, "chapter": int})
+@reader_labeler.message(payload_map={"cmd": "read", "story_id": int})
 async def read_chapter_handler(message: Message):
     payload = json.loads(message.payload)
     story_id = payload["story_id"]
-    chapter_num = payload["chapter"]
+    chapter_num = str(payload["chapter"])
     user_id = message.from_id
 
     user = await get_or_create_user(user_id)
@@ -165,7 +165,6 @@ async def read_chapter_handler(message: Message):
     if await check_access(user_id, story_id, chapter_num, is_free, full_price):
         await update_bookmark(user_id, story_id, chapter_num)
 
-        # Красивая шапка с названием ветки сюжета
         branch_info = f"🌿 Ветка: {branch}\n" if branch and branch != "Основная" else ""
         text = f"📖 [ID: {story_id}] {story_title}\n{branch_info}📄 Глава {chapter_num}: {ch_title}\n\n{content}"
 
@@ -190,9 +189,18 @@ async def read_chapter_handler(message: Message):
             text += "\n\n👉 Сделайте ваш выбор:"
             kb = choices_kb(story_id, choices)
         else:
-            # Если развилок нет — идем на следующую главу внутри ветки
-            target_next = next_ch if next_ch else (chapter_num + 1)
-            kb = reading_kb(story_id, target_next)
+            # Определение следующей главы: если указана next_chapter (например 6а), берем её, иначе пробуем +1
+            if next_ch:
+                target_next = str(next_ch)
+            elif chapter_num.isdigit():
+                target_next = str(int(chapter_num) + 1)
+            else:
+                target_next = None
+
+            if target_next:
+                kb = reading_kb(story_id, target_next)
+            else:
+                kb = ending_kb(story_id)
 
         if attachments:
             await message.answer(text, attachment=",".join(attachments), keyboard=kb)
@@ -210,11 +218,11 @@ async def read_chapter_handler(message: Message):
         )
 
 # Покупка за монеты
-@reader_labeler.message(payload_map={"cmd": "unlock_coin", "story_id": int, "chapter": int})
+@reader_labeler.message(payload_map={"cmd": "unlock_coin", "story_id": int})
 async def unlock_with_coins(message: Message):
     payload = json.loads(message.payload)
     story_id = payload["story_id"]
-    chapter_num = payload["chapter"]
+    chapter_num = str(payload["chapter"])
     user_id = message.from_id
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -241,7 +249,7 @@ async def unlock_with_coins(message: Message):
 async def continue_reading(message: Message):
     user = await get_or_create_user(message.from_id)
     story_id = user["last_story_id"]
-    chapter_num = user["last_chapter_num"] or 1
+    chapter_num = str(user["last_chapter_num"] or "1")
 
     if not story_id:
         await message.answer("Вы еще не начали читать ни одну историю! Выберите в каталоге 👇", keyboard=main_menu_kb())
@@ -252,11 +260,11 @@ async def continue_reading(message: Message):
     await read_chapter_handler(message)
 
 # Таймер
-@reader_labeler.message(payload_map={"cmd": "start_timer", "story_id": int, "chapter": int})
+@reader_labeler.message(payload_map={"cmd": "start_timer", "story_id": int})
 async def set_timer_handler(message: Message):
     payload = json.loads(message.payload)
     story_id = payload["story_id"]
-    chapter_num = payload["chapter"]
+    chapter_num = str(payload["chapter"])
     user_id = message.from_id
 
     hours = int(await get_setting("timer_hours", "3"))
