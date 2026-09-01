@@ -17,6 +17,7 @@ async def init_db():
                 referrer_id INTEGER DEFAULT NULL,
                 last_story_id INTEGER DEFAULT NULL,
                 last_chapter_num TEXT DEFAULT '1',
+                last_active INTEGER DEFAULT 0,
                 created_at INTEGER
             )
         """)
@@ -101,6 +102,153 @@ async def init_db():
         await db.execute("CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, story_id INTEGER, chapter_num TEXT, PRIMARY KEY (user_id, story_id, chapter_num))")
         await db.execute("CREATE TABLE IF NOT EXISTS chapter_timers (user_id INTEGER, story_id INTEGER, chapter_num TEXT, unlock_at INTEGER, PRIMARY KEY (user_id, story_id, chapter_num))")
 
+        # ========== НОВЫЕ ТАБЛИЦЫ ДЛЯ ДОЖИМОВ ==========
+        
+        # 8. События удержания пользователей (retention)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS retention_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                story_id INTEGER,
+                chapter_num TEXT,
+                event_type TEXT,
+                triggered_at INTEGER,
+                notified_at INTEGER DEFAULT NULL,
+                converted INTEGER DEFAULT 0,
+                UNIQUE(user_id, story_id, chapter_num, event_type)
+            )
+        """)
+
+        # 9. Настройки дожимов (админ может менять)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS retention_settings (
+                trigger_name TEXT PRIMARY KEY,
+                enabled INTEGER DEFAULT 1,
+                frequency_hours INTEGER,
+                last_updated INTEGER
+            )
+        """)
+
+        # 10. История отправленных пушей
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS push_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                event_type TEXT,
+                message_text TEXT,
+                sent_at INTEGER,
+                opened INTEGER DEFAULT 0,
+                converted INTEGER DEFAULT 0
+            )
+        """)
+
+        # 11. Промокоды и скидки
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                code TEXT PRIMARY KEY,
+                discount_percent INTEGER,
+                user_id INTEGER,
+                created_at INTEGER,
+                expires_at INTEGER,
+                used_count INTEGER DEFAULT 0,
+                max_uses INTEGER DEFAULT 1
+            )
+        """)
+
+        # ========== НОВЫЕ ТАБЛИЦЫ ДЛЯ АНАЛИТИКИ ==========
+
+        # 12. Аналитика событий
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                event_type TEXT,
+                story_id INTEGER,
+                chapter_num TEXT,
+                source TEXT,
+                event_time INTEGER,
+                session_id TEXT
+            )
+        """)
+
+        # 13. Источники трафика сессий
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS session_sources (
+                user_id INTEGER PRIMARY KEY,
+                source TEXT,
+                ref_param TEXT,
+                first_visit INTEGER
+            )
+        """)
+
+        # 14. Платежи (для отслеживания LTV)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS payment_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                story_id INTEGER,
+                amount REAL,
+                status TEXT,
+                payment_method TEXT,
+                created_at INTEGER
+            )
+        """)
+
+        # 15. Когортный анализ
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS cohort_data (
+                user_id INTEGER PRIMARY KEY,
+                signup_date TEXT,
+                first_channel TEXT,
+                lifetime_revenue REAL DEFAULT 0,
+                total_purchases INTEGER DEFAULT 0,
+                last_active INTEGER,
+                churn_date TEXT DEFAULT NULL
+            )
+        """)
+
+        # ========== НОВЫЕ ТАБЛИЦЫ ДЛЯ АДМИН-ПАНЕЛИ ==========
+
+        # 16. Лог действий администраторов
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_actions_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER,
+                action TEXT,
+                user_id INTEGER DEFAULT NULL,
+                story_id INTEGER DEFAULT NULL,
+                affected_users INTEGER DEFAULT NULL,
+                timestamp INTEGER
+            )
+        """)
+
+        # 17. Кампании рассылок
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS campaigns_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT UNIQUE,
+                story_id INTEGER,
+                admin_id INTEGER,
+                campaign_type TEXT,
+                sent INTEGER,
+                converted INTEGER,
+                timestamp INTEGER
+            )
+        """)
+
+        # 18. AB-тесты
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ab_tests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                test_id TEXT,
+                user_id INTEGER,
+                variant TEXT,
+                created_at INTEGER,
+                metric_value REAL,
+                UNIQUE(test_id, user_id)
+            )
+        """)
+
         await db.commit()
 
 # --- Хелперы ---
@@ -112,8 +260,8 @@ async def get_or_create_user(user_id: int, referrer_id: int = None):
             if not user:
                 now = int(time.time())
                 await db.execute(
-                    "INSERT INTO users (user_id, referrer_id, created_at) VALUES (?, ?, ?)",
-                    (user_id, referrer_id, now)
+                    "INSERT INTO users (user_id, referrer_id, created_at, last_active) VALUES (?, ?, ?, ?)",
+                    (user_id, referrer_id, now, now)
                 )
                 await db.commit()
                 return {"user_id": user_id, "coins": 0, "vip_until": 0, "referrer_id": referrer_id, "last_story_id": None, "last_chapter_num": "1"}
@@ -123,10 +271,11 @@ async def get_or_create_user(user_id: int, referrer_id: int = None):
             }
 
 async def update_bookmark(user_id: int, story_id: int, chapter_num: str):
+    now = int(time.time())
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE users SET last_story_id = ?, last_chapter_num = ? WHERE user_id = ?",
-            (story_id, str(chapter_num), user_id)
+            "UPDATE users SET last_story_id = ?, last_chapter_num = ?, last_active = ? WHERE user_id = ?",
+            (story_id, str(chapter_num), now, user_id)
         )
         await db.commit()
 
@@ -185,4 +334,36 @@ async def add_genre_db(name: str):
 async def delete_genre_db(genre_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM genres WHERE id = ?", (genre_id,))
+        await db.commit()
+
+# --- Новые хелперы для логирования ---
+
+async def log_admin_action(admin_id: int, action: str, user_id: int = None, story_id: int = None, affected_users: int = None):
+    """Логировать действие администратора"""
+    now = int(time.time())
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO admin_actions_log (admin_id, action, user_id, story_id, affected_users, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            (admin_id, action, user_id, story_id, affected_users, now)
+        )
+        await db.commit()
+
+async def log_analytics_event(user_id: int, event_type: str, story_id: int = None, chapter_num: str = None, source: str = None, session_id: str = None):
+    """Логировать аналитическое событие"""
+    now = int(time.time())
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO analytics_events (user_id, event_type, story_id, chapter_num, source, event_time, session_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, event_type, story_id, chapter_num, source, now, session_id)
+        )
+        await db.commit()
+
+async def log_push_sent(user_id: int, event_type: str, message_text: str):
+    """Логировать отправленный пуш"""
+    now = int(time.time())
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO push_history (user_id, event_type, message_text, sent_at) VALUES (?, ?, ?, ?)",
+            (user_id, event_type, message_text, now)
+        )
         await db.commit()
